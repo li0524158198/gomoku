@@ -122,6 +122,10 @@ section("AI 战术行为");
   // 直接封堵活三两端，或利用 1 列 1.1.1 骑缝型先冲四反先（更强），二者皆可
   const okMv9 = [[4,7],[8,7],[1,2],[1,4]].some(p => p[0] === mv9.x && p[1] === mv9.y);
   ok(okMv9, "宗师应封堵活三或冲四反先: " + JSON.stringify(mv9));
+
+  const g10 = mkGame([[5,7],[6,7],[8,7],[9,7]], [[0,0],[0,2],[0,4],[0,6]]);
+  const mv10 = chooseAiMove(g10, BLACK, 5);
+  ok(mv10.x === 7 && mv10.y === 7, "棋圣应填跳四空隙成五: " + JSON.stringify(mv10));
 }
 
 /* ---------- 4. 性能：AI 对弈全流程 ---------- */
@@ -129,10 +133,10 @@ section("性能与稳定性（AI 对弈）");
 {
   const t0 = Date.now();
   let maxMs = 0, playouts = 0;
-  for (let r = 0; r < 2; r++){
+  for (let r = 0; r < 3; r++){
     const g = new Game();
-    const lvlB = r === 0 ? 3 : 4;          // 第二盘黑方用宗师（最深）压测
-    const cap = r === 0 ? 30 : 10;
+    const lvlB = r === 0 ? 3 : r === 1 ? 4 : 5;   // 逐盘加深：大师 → 宗师 → 棋圣
+    const cap = r === 0 ? 30 : r === 1 ? 10 : 6;
     let color = BLACK;
     for (let moves = 0; moves < cap; moves++){
       const t1 = Date.now();
@@ -148,7 +152,7 @@ section("性能与稳定性（AI 对弈）");
   }
   const total = Date.now() - t0;
   console.log(`  共 ${playouts} 手，总耗时 ${total} ms，单手最慢 ${maxMs} ms`);
-  ok(maxMs < 3000, `单手耗时应 < 3s（含宗师 2s 时间上限，实测最慢 ${maxMs} ms）`);
+  ok(maxMs < 6000, `单手耗时应 < 6s（含棋圣 5s 时间上限，实测最慢 ${maxMs} ms）`);
 }
 
 console.log(`\n结果：${passed} 通过，${failed} 失败`);
