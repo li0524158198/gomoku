@@ -189,6 +189,7 @@
       <div class="btn-row">
         <button class="btn primary" id="btnNew">重新开始</button>
         <button class="btn" id="btnUndo" title="撤销你与 AI 各一手">悔棋</button>
+        <button class="btn" id="btnHint" title="提示一手（快捷键 H）">💡 提示</button>
         <button class="btn small" id="btnMute" title="音效开关">🔊</button>
       </div>
     </div>
@@ -196,7 +197,8 @@
     <div class="card rules">
       <b>玩法</b>：点击棋盘交叉点落子，任意方向先连成五子者胜（五连以上同样有效）。<br>
       <b>悔棋</b>：人机模式撤销你与 AI 各一手；双人模式撤销最后一手。<br>
-      <b>回放</b>：每局结束自动存档（本机保存最近 50 局），点击记录可回放——空格播放，←/→ 单步。
+      <b>回放</b>：每局结束自动存档（本机保存最近 50 局），点击记录可回放——空格播放，←/→ 单步。<br>
+      <b>提示</b>：卡住时点「💡 提示」或按 H，金圈标出推荐落点（按大师级计算）。
     </div>
   </div>
 </div>
@@ -477,6 +479,7 @@ const state = {
   game: new Game(),
   mode: "ai",          // "ai" 人机对弈 | "pvp" 双人对战
   humanColor: BLACK,
+  hint: null,          // 提示点 { x, y }（轮到玩家落子时显示金圈）
   replay: null,        // 回放状态 { rec, idx, playing, speed, timer }
   snapshot: null,      // 进入回放前的对局快照，退出时恢复
   recSaved: false,     // 本局是否已存入记录（防止重复保存）
@@ -589,6 +592,16 @@ function drawWin(cells){
   ctx.restore();
 }
 
+function drawHint(){
+  ctx.save();
+  ctx.shadowColor = "rgba(255,205,80,.95)"; ctx.shadowBlur = 14;
+  ctx.strokeStyle = "rgba(255,214,102,.95)";
+  ctx.lineWidth = 3;
+  ctx.setLineDash([6, 5]);
+  ctx.beginPath(); ctx.arc(px(state.hint.x), px(state.hint.y), STONE_R + 3, 0, 7); ctx.stroke();
+  ctx.restore();
+}
+
 function redraw(now = performance.now()){
   ctx.clearRect(0, 0, W, W);
   drawWood();
@@ -602,6 +615,7 @@ function redraw(now = performance.now()){
   const last = g.moves[g.moves.length - 1];
   if (last && !animMap.has(last.x + "," + last.y)) drawLastMarker(last);
   if (g.winCells) drawWin(g.winCells);
+  if (state.hint) drawHint();
   const curC = currentColor();
   const canGhost = !state.over && !state.thinking && !state.replay &&
                    (state.mode === "pvp" || curC === state.humanColor);
@@ -664,6 +678,7 @@ function doPlace(x, y, c){
 function humanMove(x, y){
   const g = state.game;
   if (state.replay) return;
+  state.hint = null;                      // 落子后提示失效
   const pvp = state.mode === "pvp";
   if (state.over || state.thinking) return;
   if (!pvp && currentColor() !== state.humanColor) return;
@@ -679,6 +694,7 @@ function finishCheck(){
   if (!last) return false;
   const wl = g.winLine(last.x, last.y);
   if (wl){
+    state.hint = null;
     g.winner = last.c; g.winCells = wl; state.over = true;
     redraw(); updatePanel();
     const pvp = state.mode === "pvp";
@@ -698,6 +714,7 @@ function finishCheck(){
   }
   if (g.moves.length >= SIZE * SIZE){
     state.over = true; g.draw = true;
+    state.hint = null;
     updatePanel();
     elOvTitle.textContent = "🤝 平局";
     elOvSub.textContent = "棋盘已满，未分胜负";
@@ -720,6 +737,7 @@ function scheduleAi(){
     const g = state.game;
     if (currentColor() === state.humanColor){ state.thinking = false; updatePanel(); return; }
     const t0 = performance.now();
+    state.hint = null;
     const mv = chooseAiMove(g, opp(state.humanColor), state.level);
     state.lastAiMs = Math.round(performance.now() - t0);
     state.thinking = false;
@@ -733,6 +751,7 @@ function newGame(){
   stopReplayOnly();
   state.snapshot = null;
   state.recSaved = false;
+  state.hint = null;
   state.game.reset();
   state.over = false; state.thinking = false;
   state.anims = []; state.ghost = null;
@@ -749,6 +768,7 @@ function undoMove(){
   } else if (!g.moves.some(m => m.c === state.humanColor)) return;
   state.over = false;
   state.recSaved = false;
+  state.hint = null;
   g.winner = 0; g.winCells = null; g.draw = false;
   elOverlay.classList.remove("show");
   if (state.mode === "pvp"){
@@ -759,6 +779,27 @@ function undoMove(){
   }
   updatePanel(); redraw();
 }
+
+/* ---------- 落子提示 ---------- */
+function showHint(){
+  const g = state.game;
+  if (state.replay || state.over || state.thinking) return;
+  if (state.mode === "ai" && currentColor() !== state.humanColor) return;
+  if (g.moves.length >= SIZE * SIZE) return;
+  elLast.textContent = "正在计算提示…";
+  setTimeout(() => {
+    if (state.replay || state.over || state.thinking) return;
+    if (state.mode === "ai" && currentColor() !== state.humanColor) return;
+    const mv = chooseAiMove(g, currentColor(), 3);        // 大师级计算
+    if (!mv || g.at(mv.x, mv.y) !== EMPTY) return;
+    state.hint = mv;
+    sfx("place");
+    redraw(); updatePanel();
+    const who = state.mode === "pvp" ? (currentColor() === BLACK ? "黑方" : "白方") : "你";
+    elLast.textContent = `💡 建议落子 ${coordName(mv.x, mv.y)}`;
+  }, 30);
+}
+function clearHint(){ state.hint = null; }
 
 /* ---------- 对局记录与回放 ---------- */
 const REC_KEY = "gomoku_records_v1", REC_MAX = 50;
@@ -850,6 +891,7 @@ function startReplay(idx){
   else state.snapshot = snapGame();    // 首次进入回放时保存当前局面
   const speed = state.replay ? state.replay.speed : 0;
   state.replay = { rec, idx: 0, playing: false, speed, timer: null };
+  state.hint = null;
   elOverlay.classList.remove("show");
   $("replayBar").classList.add("show");
   document.body.classList.add("replaying");
@@ -913,6 +955,7 @@ function exitReplay(){
   if (!state.replay) return;
   stopAutoPlay();
   state.replay = null;
+  state.hint = null;
   $("replayBar").classList.remove("show");
   document.body.classList.remove("replaying");
   restoreSnapshot();
@@ -923,6 +966,7 @@ function stopReplayOnly(){                      // newGame 用：不恢复快照
   if (!state.replay) return;
   stopAutoPlay();
   state.replay = null;
+  state.hint = null;
   $("replayBar").classList.remove("show");
   document.body.classList.remove("replaying");
 }
@@ -975,9 +1019,12 @@ function updatePanel(){
     $("chipAiIc").className = "stone-ic " + (myColor === BLACK ? "white" : "black");
     $("btnNew").disabled = true;
     $("btnUndo").disabled = true;
+    $("btnHint").disabled = true;
     return;
   }
   $("btnNew").disabled = false;
+  $("btnHint").disabled = state.thinking || state.over ||
+    (state.mode === "ai" && cur !== state.humanColor);
   const myColor = pvp ? BLACK : state.humanColor;
   elStatus.textContent = statusText();
   elStatus.classList.toggle("thinking", state.thinking);
@@ -1048,6 +1095,12 @@ $("segColor").addEventListener("click", e => {
 $("btnNew").addEventListener("click", newGame);
 $("btnAgain").addEventListener("click", newGame);
 $("btnUndo").addEventListener("click", undoMove);
+$("btnHint").addEventListener("click", showHint);
+window.addEventListener("keydown", e => {
+  if (e.key === "h" || e.key === "H"){
+    if (!e.repeat && !$("btnHint").disabled && !state.replay) showHint();
+  }
+});
 $("btnReview").addEventListener("click", () => { elOverlay.classList.remove("show"); undoMove(); });
 $("btnMute").addEventListener("click", () => {
   state.muted = !state.muted;
