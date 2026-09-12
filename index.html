@@ -1,0 +1,1111 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>智能五子棋 · 人机对弈</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; padding: 20px;
+    display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(1100px 700px at 25% -10%, #2b3242, #15181f 70%);
+    color: #e9e7e2;
+    font-family: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans SC", system-ui, sans-serif;
+  }
+  .app { display: flex; gap: 22px; align-items: stretch; flex-wrap: wrap; justify-content: center; }
+
+  .board-card {
+    position: relative;
+    padding: 10px; border-radius: 14px;
+    background: linear-gradient(160deg, #3a4152, #262c3a);
+    box-shadow: 0 18px 40px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.06);
+    align-self: flex-start;
+  }
+  canvas { display: block; width: min(628px, calc(100vw - 48px)); height: auto; border-radius: 8px; cursor: pointer; }
+
+  .overlay {
+    position: absolute; inset: 10px; border-radius: 8px;
+    display: flex; align-items: flex-end; justify-content: center;
+    padding-bottom: 16px;
+    background: rgba(13,15,20,.30); backdrop-filter: blur(1.2px);
+    opacity: 0; pointer-events: none; transition: opacity .25s;
+  }
+  .overlay.show { opacity: 1; pointer-events: auto; }
+  .overlay-box { text-align: center; padding: 26px 34px; border-radius: 14px;
+    background: rgba(30,35,46,.92); border: 1px solid #454f66; box-shadow: 0 12px 40px rgba(0,0,0,.5); }
+  .overlay-title { font-size: 30px; font-weight: 700; letter-spacing: 2px; }
+  .overlay-sub { margin-top: 10px; font-size: 13px; color: #a8b0c2; line-height: 1.7; }
+  .overlay-actions { margin-top: 18px; display: flex; gap: 10px; justify-content: center; }
+
+  .panel { width: 300px; display: flex; flex-direction: column; gap: 13px; }
+  .card { background: #212734; border: 1px solid #323a4c; border-radius: 13px; padding: 14px 16px; }
+  .card h3 { margin: 0 0 10px; font-size: 13px; color: #9aa3b8; font-weight: 600; letter-spacing: 1px; }
+
+  .players { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .pl { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-radius: 10px;
+        background: #1a1f2a; border: 1px solid #2c3444; font-size: 14px; transition: all .2s; opacity: .55; }
+  .pl.active { opacity: 1; border-color: #e8b04b; box-shadow: 0 0 0 1px rgba(232,176,75,.35), 0 0 14px rgba(232,176,75,.18); }
+  .pl em { font-style: normal; font-size: 12px; color: #8b93a7; }
+  .stone-ic { width: 18px; height: 18px; border-radius: 50%; display: inline-block; }
+  .stone-ic.black { background: radial-gradient(circle at 35% 30%, #6a6f78, #0b0c0e 70%); }
+  .stone-ic.white { background: radial-gradient(circle at 35% 30%, #fff, #c9cbcf 75%); border: 1px solid #999; }
+  .vs { font-size: 12px; color: #6b7386; font-weight: 700; }
+
+  #status { margin-top: 12px; font-size: 16px; font-weight: 600; min-height: 24px; }
+  #status.thinking { color: #e8b04b; }
+  #status.thinking::after { content: "…"; animation: dots 1.2s steps(4) infinite; }
+  @keyframes dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
+  #lastInfo { margin-top: 4px; font-size: 12px; color: #8b93a7; min-height: 16px; }
+
+  .seg { display: flex; background: #191e29; border-radius: 10px; padding: 3px; gap: 3px; }
+  .seg button { flex: 1; border: 0; background: transparent; color: #a7afc2; padding: 8px 0;
+                border-radius: 8px; cursor: pointer; font-size: 13px; font-family: inherit; transition: all .15s; }
+  .seg button.on { background: #e8b04b; color: #221a08; font-weight: 700; }
+  .seg button:not(.on):hover { color: #e9e7e2; background: #242b3a; }
+  .hint { margin-top: 8px; font-size: 11.5px; color: #77809a; line-height: 1.6; }
+
+  .btn-row { display: flex; gap: 10px; }
+  .btn { flex: 1; border: 1px solid #3d465c; background: #2a3140; color: #e9e7e2; padding: 10px 0;
+         border-radius: 10px; font-size: 14px; cursor: pointer; font-family: inherit; transition: all .15s; }
+  .btn:hover:not(:disabled) { background: #354050; border-color: #55617e; }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .btn.primary { background: #e8b04b; border-color: #e8b04b; color: #221a08; font-weight: 700; }
+  .btn.primary:hover:not(:disabled) { background: #f2bd5c; }
+  .btn.small { flex: none; padding: 10px 14px; }
+
+  .rules { font-size: 12px; color: #77809a; line-height: 1.9; }
+  .rules b { color: #a8b0c2; }
+
+  #recHead { display: flex; justify-content: space-between; align-items: center;
+             margin: 0 0 10px; font-size: 13px; color: #9aa3b8; font-weight: 600; letter-spacing: 1px; }
+  #btnClearRec { font-size: 11px; color: #8b93a7; background: none; border: 0;
+                 cursor: pointer; font-family: inherit; padding: 0; letter-spacing: 0; font-weight: 400; }
+  #btnClearRec:hover { color: #e8574a; }
+  #recordList { max-height: 218px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding-right: 2px; }
+  .rec-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 8px;
+              background: #1a1f2a; border: 1px solid #2c3444; cursor: pointer; transition: all .15s; }
+  .rec-item:hover { border-color: #e8b04b; background: #232939; }
+  .rec-main { flex: 1; min-width: 0; }
+  .rec-result { font-size: 13px; font-weight: 600; }
+  .rec-meta { font-size: 11px; color: #77809a; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rec-play { font-size: 11.5px; color: #e8b04b; opacity: .75; flex-shrink: 0; }
+  .empty-rec { font-size: 12px; color: #77809a; text-align: center; padding: 14px 0; }
+
+  #replayBar { display: none; margin-top: 10px; padding: 10px 12px; border-radius: 10px; flex-direction: column; gap: 8px;
+               background: rgba(20,24,33,.94); border: 1px solid #3a4356; }
+  #replayBar.show { display: flex; }
+  .rrow { display: flex; gap: 6px; align-items: center; width: 100%; }
+  .rbtn { height: 30px; min-width: 32px; padding: 0 8px; border-radius: 7px; border: 1px solid #3d465c;
+          background: #2a3140; color: #e9e7e2; cursor: pointer; font-size: 13px; line-height: 1; font-family: inherit; }
+  .rbtn:hover:not(:disabled) { background: #354050; }
+  .rbtn:disabled { opacity: .35; cursor: not-allowed; }
+  .rbtn.play { background: #e8b04b; border-color: #e8b04b; color: #221a08; font-weight: 700; }
+  .rbtn.play:hover:not(:disabled) { background: #f2bd5c; }
+  #replayInfo { flex: 1; text-align: center; font-size: 12.5px; color: #a8b0c2; min-width: 100px; }
+  #rpRange { width: 100%; accent-color: #e8b04b; }
+
+  @media (max-width: 1000px) {
+    body { padding: 12px; }
+    .panel { width: min(628px, calc(100vw - 48px)); }
+  }
+  body.pvp .ai-only { display: none; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="board-card">
+    <canvas id="board"></canvas>
+    <div id="replayBar">
+      <div class="rrow">
+        <button class="rbtn" id="rpFirst" title="回到开局">«</button>
+        <button class="rbtn" id="rpPrev" title="上一步（←）">‹</button>
+        <button class="rbtn play" id="rpPlay" title="自动回放（空格）">▶</button>
+        <button class="rbtn" id="rpNext" title="下一步（→）">›</button>
+        <button class="rbtn" id="rpLast" title="跳到终局">»</button>
+        <div id="replayInfo">第 0 / 0 手</div>
+        <button class="rbtn" id="rpSpeed" title="回放速度">×1</button>
+        <button class="rbtn" id="rpExit" title="退出回放">✕</button>
+      </div>
+      <input type="range" id="rpRange" min="0" max="0" value="0" />
+    </div>
+    <div class="overlay" id="overlay">
+      <div class="overlay-box">
+        <div class="overlay-title" id="ovTitle"></div>
+        <div class="overlay-sub" id="ovSub"></div>
+        <div class="overlay-actions">
+          <button class="btn primary small" id="btnAgain">再来一局</button>
+          <button class="btn small" id="btnReview">悔棋复盘</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="card">
+      <div class="players">
+        <div class="pl" id="chipHuman"><span class="stone-ic black" id="chipHumanIc"></span><span id="chipHumanName">你</span> <em id="chipHumanTag">执黑</em></div>
+        <div class="vs">VS</div>
+        <div class="pl" id="chipAi"><span class="stone-ic white" id="chipAiIc"></span><span id="chipAiName">AI</span> <em id="chipAiTag">执白</em></div>
+      </div>
+      <div id="status"></div>
+      <div id="lastInfo"></div>
+    </div>
+
+    <div class="card">
+      <h3>对弈模式</h3>
+      <div class="seg" id="segMode">
+        <button data-v="ai" class="on">人机对弈</button>
+        <button data-v="pvp">双人对战</button>
+      </div>
+      <div class="hint" id="modeHint">与 AI 对弈，你可选执黑或执白。</div>
+    </div>
+
+    <div class="card ai-only">
+      <h3>AI 难度</h3>
+      <div class="seg" id="segLevel">
+        <button data-v="1">入门</button>
+        <button data-v="2" class="on">进阶</button>
+        <button data-v="3">大师</button>
+      </div>
+      <div class="hint" id="levelHint">攻守平衡：会防活三、冲四，并制造双威胁。</div>
+    </div>
+
+    <div class="card ai-only">
+      <h3>先手选择</h3>
+      <div class="seg" id="segColor">
+        <button data-v="1" class="on">玩家执黑先行</button>
+        <button data-v="2">AI 执黑先行</button>
+      </div>
+      <div class="hint">切换后立即开始新对局（黑棋先行，无禁手）。</div>
+    </div>
+
+    <div class="card">
+      <div id="recHead"><span>对局记录</span><button id="btnClearRec">清空</button></div>
+      <div id="recordList"></div>
+    </div>
+
+    <div class="card">
+      <div class="btn-row">
+        <button class="btn primary" id="btnNew">重新开始</button>
+        <button class="btn" id="btnUndo" title="撤销你与 AI 各一手">悔棋</button>
+        <button class="btn small" id="btnMute" title="音效开关">🔊</button>
+      </div>
+    </div>
+
+    <div class="card rules">
+      <b>玩法</b>：点击棋盘交叉点落子，任意方向先连成五子者胜（五连以上同样有效）。<br>
+      <b>悔棋</b>：人机模式撤销你与 AI 各一手；双人模式撤销最后一手。<br>
+      <b>回放</b>：每局结束自动存档（本机保存最近 50 局），点击记录可回放——空格播放，←/→ 单步。
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+/*__ENGINE_START__*/
+/* ============================================================
+ *  引擎：纯逻辑，不依赖 DOM（可用 Node 单独测试）
+ * ============================================================ */
+const SIZE = 15, EMPTY = 0, BLACK = 1, WHITE = 2;
+const DIRS = [[1,0],[0,1],[1,1],[1,-1]];
+/* 棋型分值：成五 > 活四 > 冲四 > 活三 > 眠三 > 活二 ... */
+const SC = { FIVE: 10000000, L4: 1000000, R4: 100000, L3: 80000, S3: 10000, L2: 6000, S2: 800, ONE: 60 };
+const WIN_SCORE = 9500000;
+const NODE_CAP = 60000;
+
+const opp = c => (c === BLACK ? WHITE : BLACK);
+
+class Game {
+  constructor(){ this.reset(); }
+  reset(){
+    this.b = new Uint8Array(SIZE * SIZE);
+    this.moves = [];          // {x, y, c}
+    this.winner = 0;          // 0 = 未结束
+    this.winCells = null;     // 获胜五连的坐标
+    this.draw = false;
+  }
+  inB(x, y){ return x >= 0 && x < SIZE && y >= 0 && y < SIZE; }
+  at(x, y){ return this.inB(x, y) ? this.b[y * SIZE + x] : -1; }
+  place(x, y, c){ this.b[y * SIZE + x] = c; this.moves.push({ x, y, c }); }
+  undo(){ const m = this.moves.pop(); if (m) this.b[m.y * SIZE + m.x] = EMPTY; }
+
+  /* (x,y) 落 c 后是否成五（x,y 可为空点 = 虚拟落子），用于精确的胜负/威胁判断 */
+  makesFive(x, y, c){
+    for (const [dx, dy] of DIRS){
+      let cnt = 1;
+      for (const s of [1, -1]){
+        let nx = x + dx * s, ny = y + dy * s;
+        while (this.at(nx, ny) === c){ cnt++; nx += dx * s; ny += dy * s; }
+      }
+      if (cnt >= 5) return true;
+    }
+    return false;
+  }
+  /* 返回经过 (x,y) 的五连（含长连）全部棋子，按连线顺序排列，否则 null */
+  winLine(x, y){
+    const c = this.at(x, y);
+    for (const [dx, dy] of DIRS){
+      const before = [], after = [];
+      for (const s of [1, -1]){
+        const seg = s === 1 ? after : before;
+        let nx = x + dx * s, ny = y + dy * s;
+        while (this.at(nx, ny) === c){ seg.push([nx, ny]); nx += dx * s; ny += dy * s; }
+      }
+      before.reverse();
+      const cells = [...before, [x, y], ...after];
+      if (cells.length >= 5) return cells;
+    }
+    return null;
+  }
+}
+
+/* ------------------------------------------------------------
+ * 单点评估：若 c 在空点 (x,y) 落子，逐方向用 5 格滑窗识别棋型
+ *（天然覆盖跳三 / 跳四等空隙棋型），并加组合（双三、四三、双四）加成
+ * ---------------------------------------------------------- */
+function pointScore(g, x, y, c){
+  let total = 0, nL4 = 0, nR4 = 0, nL3 = 0;
+
+  for (const [dx, dy] of DIRS){
+    let dirBest = 0, dirHadL4 = false;
+
+    for (let off = -4; off <= 0; off++){
+      let k = 0, z = 0, e1 = null, e2 = null;
+      for (let i = 0; i < 5; i++){
+        const t = off + i;
+        if (t === 0){ k++; continue; }                 // 虚拟落子位
+        const v = g.at(x + t * dx, y + t * dy);
+        if (v === c) k++;
+        else if (v === EMPTY){ if (e1 === null) e1 = t; else if (e2 === null) e2 = t; z++; }
+      }
+
+      if (k === 5) return SC.FIVE;                     // 直接成五
+
+      if (k === 4 && z === 1){                         // 四：一子成五
+        const atEnd = (e1 === off || e1 === off + 4);  // 四子连续 <=> 空位在窗口端点
+        let live = false;
+        if (atEnd){
+          const ox = e1 === off ? x + (off + 5) * dx : x + (off - 1) * dx;
+          const oy = e1 === off ? y + (off + 5) * dy : y + (off - 1) * dy;
+          live = g.at(ox, oy) === EMPTY;               // 冲四连续且窗外一侧为空 => 活四
+        }
+        if (live){ if (dirBest < SC.L4) dirBest = SC.L4; dirHadL4 = true; }
+        else { if (dirBest < SC.R4) dirBest = SC.R4; }
+        continue;
+      }
+
+      if (k === 3 && z === 2){                         // 三：试探填空能否成活四
+        let liveThree = false;
+        for (const e of [e1, e2]){
+          const eo = (e === e1) ? e2 : e1;
+          if (!(eo === off || eo === off + 4)) continue;   // 填后四子不连续 => 只能成冲四
+          const ox = eo === off ? x + (off + 5) * dx : x + (off - 1) * dx;
+          const oy = eo === off ? y + (off + 5) * dy : y + (off - 1) * dy;
+          if (g.at(ox, oy) === EMPTY){ liveThree = true; break; }
+        }
+        if (liveThree){ if (dirBest < SC.L3) dirBest = SC.L3; }
+        else if (dirBest < SC.S3) dirBest = SC.S3;
+        continue;
+      }
+
+      if (k === 2 && z === 3){ if (dirBest < SC.L2) dirBest = SC.L2; continue; }
+      if (k === 1 && z === 4){ if (dirBest < SC.ONE) dirBest = SC.ONE; }
+    }
+    if (dirHadL4) nL4++;
+    else if (dirBest === SC.R4) nR4++;
+    if (dirBest === SC.L3) nL3++;
+    total += dirBest;
+  }
+
+  /* 组合威胁加成：双活三 / 四三 / 双四 都是几乎制胜的手段 */
+  if (nL4 >= 1) total += 4000000;
+  if (nL4 >= 2) total += 8000000;
+  if (nR4 >= 2) total += 900000;
+  if (nR4 >= 1 && nL3 >= 1) total += 900000;
+  if (nL3 >= 2) total += 500000;
+  return total;
+}
+
+/* 全盘评估：从 color（当前行棋方）视角，累计双方棋型分 */
+function evaluate(g, color){
+  let mine = 0, theirs = 0;
+  for (const m of g.moves){
+    const s = pointScore(g, m.x, m.y, m.c);
+    if (m.c === color) mine += s; else theirs += s;
+  }
+  return mine - theirs;
+}
+
+/* 候选点：已有棋子切比雪夫距离 ≤2 的空点，按 攻分 + 0.9×防分 排序取前 K */
+function genCandidates(g, color, K){
+  if (g.moves.length === 0) return [{ x: 7, y: 7 }];
+  const seen = new Set(), list = [];
+  const foe = opp(color);
+  for (const m of g.moves){
+    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++){
+      const x = m.x + dx, y = m.y + dy;
+      if (!g.inB(x, y)) continue;
+      const key = y * SIZE + x;
+      if (g.b[key] !== EMPTY || seen.has(key)) continue;
+      seen.add(key);
+      const my = pointScore(g, x, y, color);
+      const op = pointScore(g, x, y, foe);
+      list.push({ x, y, score: my + op * 0.9 });
+    }
+  }
+  list.sort((a, b) => b.score - a.score);
+  return list.slice(0, K);
+}
+
+/* 所有能立即成五的点 */
+function findWinPoints(g, c){
+  const pts = [];
+  if (g.moves.length === 0) return pts;
+  const seen = new Uint8Array(SIZE * SIZE);
+  for (const m of g.moves){
+    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++){
+      const x = m.x + dx, y = m.y + dy;
+      if (!g.inB(x, y)) continue;
+      const key = y * SIZE + x;
+      if (g.b[key] !== EMPTY || seen[key]) continue;
+      seen[key] = 1;
+      if (g.makesFive(x, y, c)) pts.push({ x, y });
+    }
+  }
+  return pts;
+}
+
+/* α-β 剪枝极小极大搜索（negamax），value 从当前行棋方视角 */
+let nodeCount = 0;
+function negamax(g, depth, alpha, beta, color){
+  if (depth <= 0 || nodeCount > NODE_CAP) return evaluate(g, color);
+  nodeCount++;
+  const cands = genCandidates(g, color, 9);
+  if (cands.length === 0) return evaluate(g, color);
+  let best = -Infinity;
+  for (const cd of cands){
+    g.place(cd.x, cd.y, color);
+    let val;
+    if (g.winLine(cd.x, cd.y)) val = WIN_SCORE + depth * 1000;
+    else val = -negamax(g, depth - 1, -beta, -alpha, opp(color));
+    g.undo();
+    if (val > best) best = val;
+    if (best > alpha) alpha = best;
+    if (alpha >= beta) break;
+  }
+  return best === -Infinity ? evaluate(g, color) : best;
+}
+
+function randomEmpty(g){
+  const ps = [];
+  for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++)
+    if (g.at(x, y) === EMPTY) ps.push({ x, y });
+  return ps[Math.floor(Math.random() * ps.length)] || { x: 7, y: 7 };
+}
+
+/* AI 主入口：精确战术优先（成五 / 挡五），其余交给搜索
+ * level: 1 入门(贪心+随机)  2 进阶(2层搜索)  3 大师(4层搜索) */
+function chooseAiMove(g, aiColor, level){
+  const foe = opp(aiColor);
+
+  const myFive = findWinPoints(g, aiColor);
+  if (myFive.length) return myFive[0];                     // 1. 我方一步成五：直接赢
+
+  const foeFive = findWinPoints(g, foe);
+  if (foeFive.length){                                     // 2. 对方一步成五：必须堵
+    let best = foeFive[0], bs = -1;
+    for (const p of foeFive){
+      const s = pointScore(g, p.x, p.y, aiColor);
+      if (s > bs){ bs = s; best = p; }
+    }
+    return best;
+  }
+
+  if (g.moves.length === 0) return { x: 7, y: 7 };         // 3. 空盘落天元
+  if (g.moves.length === 1){                               // 4. 第二手贴身应对
+    const m = g.moves[0];
+    for (const [dx, dy] of [[1,0],[0,1],[-1,0],[0,-1],[1,1],[-1,-1],[1,-1],[-1,1]]){
+      const x = m.x + dx, y = m.y + dy;
+      if (g.at(x, y) === EMPTY) return { x, y };
+    }
+  }
+
+  if (level === 1){                                        // 5a. 入门：贪心 + 随机失误
+    const cands = genCandidates(g, aiColor, 6);
+    if (!cands.length) return randomEmpty(g);
+    if (Math.random() < 0.6 || cands.length < 2) return cands[0];
+    return cands[1 + Math.floor(Math.random() * Math.min(cands.length - 1, 3))];
+  }
+
+  const depth = level === 2 ? 2 : 4;                       // 5b. 进阶/大师：α-β 搜索
+  nodeCount = 0;
+  const cands = genCandidates(g, aiColor, 12);
+  let best = cands[0], bestVal = -Infinity, alpha = -Infinity;
+  for (const cd of cands){
+    g.place(cd.x, cd.y, aiColor);
+    let val;
+    if (g.winLine(cd.x, cd.y)) val = WIN_SCORE + depth * 1000;
+    else val = -negamax(g, depth - 1, -Infinity, -alpha, foe);
+    g.undo();
+    cd.val = val;
+    if (val > bestVal){ bestVal = val; best = cd; }
+    if (val > alpha) alpha = val;
+  }
+  const ties = cands.filter(c => c.val >= bestVal - 1);    // 等价着法随机挑一个，避免每局雷同
+  return ties[Math.floor(Math.random() * ties.length)] || best;
+}
+/*__ENGINE_END__*/
+
+/* ============================================================
+ *  UI 层
+ * ============================================================ */
+const CELL = 40, PAD = 34, W = PAD * 2 + CELL * (SIZE - 1), STONE_R = 17.5;
+const LETTERS = "ABCDEFGHIJKLMNO";
+const cv = document.getElementById("board");
+const ctx = cv.getContext("2d");
+
+function setupCanvas(){
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = W * dpr; cv.height = W * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+setupCanvas();
+window.addEventListener("resize", () => { setupCanvas(); redraw(); });
+
+const state = {
+  game: new Game(),
+  mode: "ai",          // "ai" 人机对弈 | "pvp" 双人对战
+  humanColor: BLACK,
+  replay: null,        // 回放状态 { rec, idx, playing, speed, timer }
+  snapshot: null,      // 进入回放前的对局快照，退出时恢复
+  recSaved: false,     // 本局是否已存入记录（防止重复保存）
+  level: 2,
+  over: false,
+  thinking: false,
+  token: 0,            // 防止重开后旧定时器落子
+  ghost: null,
+  anims: [],
+  animating: false,
+  lastAiMs: 0,
+  muted: false,
+};
+
+const px = i => PAD + i * CELL;
+const coordName = (x, y) => LETTERS[x] + (SIZE - y);
+
+/* ---------- 绘制 ---------- */
+let _rs = 42;
+const _rnd = () => (_rs = (_rs * 1103515245 + 12345) % 2147483648) / 2147483648;
+const SPECKS = Array.from({ length: 150 }, () => ({ x: _rnd() * W, y: _rnd() * W, r: .5 + _rnd() * 1.5, a: .025 + _rnd() * .05 }));
+const GRAINS = Array.from({ length: 9 }, () => {
+  const y0 = _rnd() * W;
+  return { y0, amp: 2 + _rnd() * 6, ph: _rnd() * 6.28, a: .03 + _rnd() * .04 };
+});
+
+function drawWood(){
+  const grad = ctx.createLinearGradient(0, 0, W, W);
+  grad.addColorStop(0, "#ecca8f"); grad.addColorStop(.5, "#ddb26e"); grad.addColorStop(1, "#cf9d58");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, W);
+  ctx.strokeStyle = "rgba(120,72,20,1)";
+  for (const gr of GRAINS){
+    ctx.beginPath();
+    ctx.globalAlpha = gr.a;
+    for (let x = 0; x <= W; x += 8){
+      const y = gr.y0 + Math.sin(x / 90 + gr.ph) * gr.amp;
+      x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.lineWidth = 1.2; ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  for (const s of SPECKS){
+    ctx.beginPath(); ctx.globalAlpha = s.a;
+    ctx.fillStyle = "#6b4a1e";
+    ctx.arc(s.x, s.y, s.r, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawGrid(){
+  ctx.strokeStyle = "rgba(82,50,16,.85)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i < SIZE; i++){
+    ctx.beginPath(); ctx.moveTo(px(0), px(i)); ctx.lineTo(px(SIZE - 1), px(i)); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(px(i), px(0)); ctx.lineTo(px(i), px(SIZE - 1)); ctx.stroke();
+  }
+  ctx.lineWidth = 2.2;
+  ctx.strokeRect(px(0), px(0), CELL * (SIZE - 1), CELL * (SIZE - 1));
+  ctx.fillStyle = "rgba(82,50,16,.9)";
+  for (const [sx, sy] of [[3,3],[11,3],[7,7],[3,11],[11,11]]){
+    ctx.beginPath(); ctx.arc(px(sx), px(sy), 3.6, 0, 7); ctx.fill();
+  }
+  ctx.fillStyle = "rgba(70,42,12,.72)";
+  ctx.font = "11px system-ui, sans-serif";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  for (let i = 0; i < SIZE; i++){
+    ctx.fillText(LETTERS[i], px(i), W - 12);
+    ctx.fillText(String(SIZE - i), 13, px(i));
+  }
+}
+
+function drawStone(x, y, c, t = 1, ghost = false){
+  const cxp = px(x), cyp = px(y);
+  const r = STONE_R * (ghost ? 1 : 1 + (1 - t) * 0.55);
+  ctx.save();
+  if (ghost) ctx.globalAlpha = 0.38;
+  else {
+    ctx.globalAlpha = 0.35 + 0.65 * t;
+    ctx.shadowColor = "rgba(0,0,0,.45)";
+    ctx.shadowBlur = 6 * t; ctx.shadowOffsetY = 2 * t;
+  }
+  const g2 = ctx.createRadialGradient(cxp - r * .35, cyp - r * .4, r * .15, cxp, cyp, r);
+  if (c === BLACK){ g2.addColorStop(0, "#707680"); g2.addColorStop(.35, "#2c2f34"); g2.addColorStop(1, "#0a0b0d"); }
+  else { g2.addColorStop(0, "#ffffff"); g2.addColorStop(.55, "#f1f1ee"); g2.addColorStop(1, "#c6c8cd"); }
+  ctx.fillStyle = g2;
+  ctx.beginPath(); ctx.arc(cxp, cyp, r, 0, 7); ctx.fill();
+  if (c !== BLACK){ ctx.shadowColor = "transparent"; ctx.strokeStyle = "rgba(0,0,0,.16)"; ctx.lineWidth = 1; ctx.stroke(); }
+  ctx.restore();
+}
+
+function drawLastMarker(m){
+  ctx.save();
+  ctx.fillStyle = m.c === BLACK ? "#e8574a" : "#d63d2f";
+  ctx.beginPath(); ctx.arc(px(m.x), px(m.y), 3.6, 0, 7); ctx.fill();
+  ctx.restore();
+}
+
+function drawWin(cells){
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,205,80,.55)";
+  ctx.lineWidth = 6; ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(px(cells[0][0]), px(cells[0][1]));
+  ctx.lineTo(px(cells[cells.length - 1][0]), px(cells[cells.length - 1][1]));
+  ctx.stroke();
+  ctx.shadowColor = "rgba(255,205,80,.9)"; ctx.shadowBlur = 10;
+  ctx.strokeStyle = "rgba(255,214,102,.95)"; ctx.lineWidth = 2.6;
+  for (const [x, y] of cells){ ctx.beginPath(); ctx.arc(px(x), px(y), STONE_R + 2, 0, 7); ctx.stroke(); }
+  ctx.restore();
+}
+
+function redraw(now = performance.now()){
+  ctx.clearRect(0, 0, W, W);
+  drawWood();
+  drawGrid();
+  const g = state.game;
+  const animMap = new Map(state.anims.map(a => [a.x + "," + a.y, a]));
+  for (const m of g.moves){
+    const a = animMap.get(m.x + "," + m.y);
+    drawStone(m.x, m.y, m.c, a ? Math.min(1, (now - a.t0) / 160) : 1);
+  }
+  const last = g.moves[g.moves.length - 1];
+  if (last && !animMap.has(last.x + "," + last.y)) drawLastMarker(last);
+  if (g.winCells) drawWin(g.winCells);
+  const curC = currentColor();
+  const canGhost = !state.over && !state.thinking && !state.replay &&
+                   (state.mode === "pvp" || curC === state.humanColor);
+  if (state.ghost && canGhost && g.at(state.ghost.x, state.ghost.y) === EMPTY){
+    drawStone(state.ghost.x, state.ghost.y, curC, 1, true);
+  }
+}
+
+function startAnim(x, y, c){
+  state.anims.push({ x, y, c, t0: performance.now() });
+  if (!state.animating){
+    state.animating = true;
+    requestAnimationFrame(function tick(now){
+      state.anims = state.anims.filter(a => now - a.t0 < 170);
+      redraw(now);
+      if (state.anims.length) requestAnimationFrame(tick);
+      else state.animating = false;
+    });
+  }
+}
+
+/* ---------- 音效（WebAudio，无外部资源） ---------- */
+let actx = null;
+function sfx(kind){
+  if (state.muted) return;
+  try {
+    actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+    if (actx.state === "suspended") actx.resume();
+    const t = actx.currentTime;
+    const tone = (f, t0, dur, type = "sine", gain = .12) => {
+      const o = actx.createOscillator(), gn = actx.createGain();
+      o.type = type; o.frequency.value = f;
+      gn.gain.setValueAtTime(gain, t + t0);
+      gn.gain.exponentialRampToValueAtTime(.001, t + t0 + dur);
+      o.connect(gn).connect(actx.destination);
+      o.start(t + t0); o.stop(t + t0 + dur + .02);
+    };
+    if (kind === "place"){ tone(620, 0, .06, "triangle", .16); tone(210, 0, .08, "sine", .1); }
+    else if (kind === "win") [523, 659, 784, 1047].forEach((f, i) => tone(f, i * .12, .28, "triangle", .15));
+    else if (kind === "lose") [330, 262, 196].forEach((f, i) => tone(f, i * .16, .3, "sine", .13));
+    else if (kind === "draw") tone(440, 0, .35, "sine", .12);
+  } catch (e) { /* 音效失败不影响游戏 */ }
+}
+
+/* ---------- 对局流程 ---------- */
+const $ = id => document.getElementById(id);
+const elStatus = $("status"), elLast = $("lastInfo"), elOverlay = $("overlay"),
+      elOvTitle = $("ovTitle"), elOvSub = $("ovSub");
+
+function currentColor(){ return state.game.moves.length % 2 === 0 ? BLACK : WHITE; }
+
+function doPlace(x, y, c){
+  state.game.place(x, y, c);
+  startAnim(x, y, c);
+  sfx("place");
+  redraw();
+  updatePanel();
+}
+
+function humanMove(x, y){
+  const g = state.game;
+  if (state.replay) return;
+  const pvp = state.mode === "pvp";
+  if (state.over || state.thinking) return;
+  if (!pvp && currentColor() !== state.humanColor) return;
+  if (g.at(x, y) !== EMPTY) return;
+  doPlace(x, y, currentColor());
+  if (finishCheck()) return;
+  if (!pvp) scheduleAi();
+}
+
+function finishCheck(){
+  const g = state.game;
+  const last = g.moves[g.moves.length - 1];
+  if (!last) return false;
+  const wl = g.winLine(last.x, last.y);
+  if (wl){
+    g.winner = last.c; g.winCells = wl; state.over = true;
+    redraw(); updatePanel();
+    const pvp = state.mode === "pvp";
+    const humanWon = last.c === state.humanColor;
+    elOvTitle.textContent = pvp
+      ? (last.c === BLACK ? "🏆 黑棋获胜！" : "🏆 白棋获胜！")
+      : (humanWon ? "🏆 你赢了！" : "🤖 AI 获胜");
+    elOvSub.innerHTML = `${last.c === BLACK ? "黑棋" : "白棋"}五连：` +
+      wl.map(([x, y]) => coordName(x, y)).join(" · ") + `<br>共 ${g.moves.length} 手`;
+    saveRecord();
+    elOvSub.innerHTML += "<br>✔ 已存入对局记录";
+    $("btnReview").style.display =
+      (pvp ? g.moves.length > 0 : g.moves.some(m => m.c === state.humanColor)) ? "" : "none";
+    elOverlay.classList.add("show");
+    sfx(pvp || humanWon ? "win" : "lose");
+    return true;
+  }
+  if (g.moves.length >= SIZE * SIZE){
+    state.over = true; g.draw = true;
+    updatePanel();
+    elOvTitle.textContent = "🤝 平局";
+    elOvSub.textContent = "棋盘已满，未分胜负";
+    saveRecord();
+    elOvSub.textContent += " · 已存入对局记录";
+    $("btnReview").style.display = "none";
+    elOverlay.classList.add("show");
+    sfx("draw");
+    return true;
+  }
+  return false;
+}
+
+function scheduleAi(){
+  state.thinking = true;
+  updatePanel();
+  const tk = ++state.token;
+  setTimeout(() => {
+    if (tk !== state.token || state.over) return;
+    const g = state.game;
+    if (currentColor() === state.humanColor){ state.thinking = false; updatePanel(); return; }
+    const t0 = performance.now();
+    const mv = chooseAiMove(g, opp(state.humanColor), state.level);
+    state.lastAiMs = Math.round(performance.now() - t0);
+    state.thinking = false;
+    doPlace(mv.x, mv.y, opp(state.humanColor));
+    finishCheck();
+  }, 160);
+}
+
+function newGame(){
+  state.token++;
+  stopReplayOnly();
+  state.snapshot = null;
+  state.recSaved = false;
+  state.game.reset();
+  state.over = false; state.thinking = false;
+  state.anims = []; state.ghost = null;
+  elOverlay.classList.remove("show");
+  updatePanel(); redraw();
+  if (state.mode === "ai" && state.humanColor === WHITE) scheduleAi();
+}
+
+function undoMove(){
+  const g = state.game;
+  if (state.replay || state.thinking) return;
+  if (state.mode === "pvp"){
+    if (g.moves.length === 0) return;
+  } else if (!g.moves.some(m => m.c === state.humanColor)) return;
+  state.over = false;
+  state.recSaved = false;
+  g.winner = 0; g.winCells = null; g.draw = false;
+  elOverlay.classList.remove("show");
+  if (state.mode === "pvp"){
+    g.undo();
+  } else {
+    if (g.moves.length && g.moves[g.moves.length - 1].c !== state.humanColor) g.undo();
+    if (g.moves.length && g.moves[g.moves.length - 1].c === state.humanColor) g.undo();
+  }
+  updatePanel(); redraw();
+}
+
+/* ---------- 对局记录与回放 ---------- */
+const REC_KEY = "gomoku_records_v1", REC_MAX = 50;
+const SPEEDS = [{ label: "×1", ms: 700 }, { label: "×2", ms: 350 }, { label: "×4", ms: 150 }];
+state.records = loadRecords();
+
+function loadRecords(){
+  try { return JSON.parse(localStorage.getItem(REC_KEY) || "[]"); } catch (e) { return []; }
+}
+function persistRecords(){
+  try { localStorage.setItem(REC_KEY, JSON.stringify(state.records)); } catch (e) { /* 存储不可用时仅保留内存记录 */ }
+}
+function recResultText(r){
+  if (r.result === "draw") return "🤝 平局";
+  if (r.mode === "pvp") return r.result === "black" ? "⚫ 黑方胜" : "⚪ 白方胜";
+  return r.result === "win" ? "🏆 你获胜" : "🤖 AI 获胜";
+}
+function recMetaText(r){
+  const d = new Date(r.ts), p = n => String(n).padStart(2, "0");
+  const mode = r.mode === "pvp" ? "双人" : "人机·" + ["", "入门", "进阶", "大师"][r.level || 2];
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())} · ${mode} · ${r.moves.length} 手`;
+}
+function renderRecords(){
+  const list = $("recordList");
+  if (!state.records.length){
+    list.innerHTML = '<div class="empty-rec">暂无记录——完成一局后自动保存</div>';
+    $("btnClearRec").style.display = "none";
+    return;
+  }
+  $("btnClearRec").style.display = "";
+  $("btnClearRec").textContent = "清空";
+  list.innerHTML = "";
+  state.records.forEach((r, i) => {
+    const div = document.createElement("div");
+    div.className = "rec-item";
+    div.innerHTML = `<div class="rec-main"><div class="rec-result">${recResultText(r)}</div>` +
+      `<div class="rec-meta">${recMetaText(r)}</div></div><div class="rec-play">▶ 回放</div>`;
+    div.addEventListener("click", () => startReplay(i));
+    list.appendChild(div);
+  });
+}
+function saveRecord(){
+  if (state.recSaved) return;
+  const g = state.game;
+  let result;
+  if (g.draw) result = "draw";
+  else if (state.mode === "pvp") result = g.winner === BLACK ? "black" : "white";
+  else result = g.winner === state.humanColor ? "win" : "lose";
+  state.records.unshift({
+    ts: Date.now(),
+    mode: state.mode,
+    level: state.level,
+    humanColor: state.humanColor,
+    result,
+    moves: g.moves.map(m => [m.x, m.y, m.c]),
+  });
+  if (state.records.length > REC_MAX) state.records.length = REC_MAX;
+  state.recSaved = true;
+  persistRecords();
+  renderRecords();
+}
+
+function snapGame(){
+  const g = state.game;
+  return {
+    moves: g.moves.map(m => ({ x: m.x, y: m.y, c: m.c })),
+    winner: g.winner, draw: g.draw,
+    winCells: g.winCells ? g.winCells.map(c => c.slice()) : null,
+    over: state.over, recSaved: state.recSaved,
+  };
+}
+function restoreSnapshot(){
+  const s = state.snapshot;
+  state.snapshot = null;
+  if (!s){ newGame(); return; }
+  const g = state.game;
+  g.reset();
+  for (const m of s.moves) g.place(m.x, m.y, m.c);
+  g.winner = s.winner; g.draw = s.draw; g.winCells = s.winCells;
+  state.over = s.over; state.recSaved = s.recSaved;
+}
+
+function startReplay(idx){
+  const rec = state.records[idx];
+  if (!rec) return;
+  state.token++;                       // 取消等待中的 AI 行棋
+  state.thinking = false;
+  if (state.replay) stopAutoPlay();
+  else state.snapshot = snapGame();    // 首次进入回放时保存当前局面
+  const speed = state.replay ? state.replay.speed : 0;
+  state.replay = { rec, idx: 0, playing: false, speed, timer: null };
+  elOverlay.classList.remove("show");
+  $("replayBar").classList.add("show");
+  document.body.classList.add("replaying");
+  $("rpSpeed").textContent = SPEEDS[speed].label;
+  $("rpPlay").textContent = "▶";
+  setReplayIdx(0, true);
+}
+function stopAutoPlay(){
+  const rp = state.replay;
+  if (rp){
+    rp.playing = false;
+    if (rp.timer){ clearInterval(rp.timer); rp.timer = null; }
+  }
+  $("rpPlay").textContent = "▶";
+}
+function setReplayIdx(i, silent){
+  const rp = state.replay;
+  if (!rp) return;
+  const n = rp.rec.moves.length;
+  rp.idx = Math.max(0, Math.min(i, n));
+  const g = state.game;
+  g.reset();
+  g.winner = 0; g.draw = false; g.winCells = null;
+  state.over = false;
+  for (let k = 0; k < rp.idx; k++) g.place(...rp.rec.moves[k]);
+  if (rp.idx >= n && n > 0){                      // 回放到终局：重算胜负与五连
+    const last = g.moves[n - 1];
+    const wl = g.winLine(last.x, last.y);
+    if (wl){ g.winner = last.c; g.winCells = wl; }
+    else if (n >= SIZE * SIZE) g.draw = true;
+    state.over = true;
+  }
+  if (!silent && rp.idx > 0) sfx("place");
+  $("replayInfo").textContent = g.winCells
+    ? `${g.winner === BLACK ? "黑棋" : "白棋"}五连胜 · 共 ${n} 手`
+    : (g.draw ? `棋盘已满 · 共 ${n} 手` : `第 ${rp.idx} / ${n} 手`);
+  $("rpRange").max = n; $("rpRange").value = rp.idx;
+  $("rpFirst").disabled = $("rpPrev").disabled = rp.idx === 0;
+  $("rpNext").disabled = $("rpLast").disabled = rp.idx >= n;
+  if (rp.idx >= n) stopAutoPlay();
+  redraw(); updatePanel();
+}
+function stepReplay(d){
+  const rp = state.replay;
+  if (rp) setReplayIdx(rp.idx + d);
+}
+function toggleAutoPlay(){
+  const rp = state.replay;
+  if (!rp) return;
+  if (rp.playing){ stopAutoPlay(); return; }
+  if (rp.idx >= rp.rec.moves.length) setReplayIdx(0, true);   // 播完再按 → 从头重播
+  rp.playing = true;
+  $("rpPlay").textContent = "❚❚";
+  rp.timer = setInterval(() => {
+    const cur = state.replay;
+    if (!cur || !cur.playing || cur.idx >= cur.rec.moves.length){ stopAutoPlay(); return; }
+    setReplayIdx(cur.idx + 1);
+  }, SPEEDS[rp.speed].ms);
+}
+function exitReplay(){
+  if (!state.replay) return;
+  stopAutoPlay();
+  state.replay = null;
+  $("replayBar").classList.remove("show");
+  document.body.classList.remove("replaying");
+  restoreSnapshot();
+  state.anims = []; state.ghost = null;
+  updatePanel(); redraw();
+}
+function stopReplayOnly(){                      // newGame 用：不恢复快照，直接弃掉
+  if (!state.replay) return;
+  stopAutoPlay();
+  state.replay = null;
+  $("replayBar").classList.remove("show");
+  document.body.classList.remove("replaying");
+}
+
+/* ---------- 面板 ---------- */
+function statusText(){
+  const g = state.game, pvp = state.mode === "pvp";
+  if (state.over){
+    if (g.draw) return "平局！棋盘已满";
+    if (pvp) return g.winner === BLACK ? "🏆 黑棋获胜！" : "🏆 白棋获胜！";
+    return g.winner === state.humanColor ? "🎉 恭喜，你赢了！" : "AI 获胜，再试试？";
+  }
+  if (state.thinking) return "AI 思考中";
+  if (pvp) return currentColor() === BLACK ? "轮到黑方落子（黑先行）" : "轮到白方落子";
+  return "轮到你落子，点击棋盘即可";
+}
+
+function lastInfoText(){
+  const g = state.game, pvp = state.mode === "pvp";
+  const last = g.moves[g.moves.length - 1];
+  if (!last) return pvp ? "黑方先行" : (state.humanColor === BLACK ? "你执黑先行" : "AI 执黑先行");
+  const who = pvp ? (last.c === BLACK ? "黑方" : "白方")
+                  : (last.c === state.humanColor ? "你" : "AI");
+  let s = `${who}落子 ${coordName(last.x, last.y)}`;
+  if (who === "AI" && state.lastAiMs) s += `（用时 ${state.lastAiMs} ms）`;
+  return s;
+}
+
+function updatePanel(){
+  const g = state.game, cur = currentColor(), pvp = state.mode === "pvp";
+  if (state.replay){
+    const rp = state.replay, n = rp.rec.moves.length;
+    const isPvpRec = rp.rec.mode === "pvp";
+    elStatus.classList.remove("thinking");
+    elStatus.textContent = state.over
+      ? (g.draw ? "回放结束 · 平局" : `回放结束 · ${g.winner === BLACK ? "黑棋" : "白棋"}胜`)
+      : `▶ 回放中 · 第 ${rp.idx}/${n} 手`;
+    const last = rp.idx > 0 ? rp.rec.moves[rp.idx - 1] : null;
+    elLast.textContent = last
+      ? `${last[2] === BLACK ? "黑方" : "白方"}落子 ${coordName(last[0], last[1])}`
+      : "回到开局";
+    const myColor = isPvpRec ? BLACK : rp.rec.humanColor;
+    $("chipHuman").classList.toggle("active", !state.over && cur === myColor);
+    $("chipAi").classList.toggle("active", !state.over && cur !== myColor);
+    $("chipHumanName").textContent = isPvpRec ? "黑方" : "你";
+    $("chipAiName").textContent = isPvpRec ? "白方" : "AI";
+    $("chipHumanTag").textContent = isPvpRec ? "先行" : (myColor === BLACK ? "执黑" : "执白");
+    $("chipAiTag").textContent = isPvpRec ? "后行" : (myColor === BLACK ? "执白" : "执黑");
+    $("chipHumanIc").className = "stone-ic " + (myColor === BLACK ? "black" : "white");
+    $("chipAiIc").className = "stone-ic " + (myColor === BLACK ? "white" : "black");
+    $("btnNew").disabled = true;
+    $("btnUndo").disabled = true;
+    return;
+  }
+  $("btnNew").disabled = false;
+  const myColor = pvp ? BLACK : state.humanColor;
+  elStatus.textContent = statusText();
+  elStatus.classList.toggle("thinking", state.thinking);
+  elLast.textContent = lastInfoText();
+  $("chipHuman").classList.toggle("active", !state.over && cur === myColor);
+  $("chipAi").classList.toggle("active", !state.over && cur !== myColor);
+  $("chipHumanName").textContent = pvp ? "黑方" : "你";
+  $("chipAiName").textContent = pvp ? "白方" : "AI";
+  $("chipHumanTag").textContent = pvp ? "先行" : (state.humanColor === BLACK ? "执黑" : "执白");
+  $("chipAiTag").textContent = pvp ? "后行" : (state.humanColor === BLACK ? "执白" : "执黑");
+  $("chipHumanIc").className = "stone-ic " + (pvp || state.humanColor === BLACK ? "black" : "white");
+  $("chipAiIc").className = "stone-ic " + (pvp || state.humanColor === BLACK ? "white" : "black");
+  $("btnUndo").disabled = state.thinking ||
+    (pvp ? g.moves.length === 0 : !g.moves.some(m => m.c === state.humanColor));
+}
+
+/* ---------- 事件绑定 ---------- */
+function eventCell(e){
+  const rect = cv.getBoundingClientRect();
+  const mx = (e.clientX - rect.left) * (W / rect.width);
+  const my = (e.clientY - rect.top) * (W / rect.height);
+  const x = Math.round((mx - PAD) / CELL), y = Math.round((my - PAD) / CELL);
+  return (x >= 0 && x < SIZE && y >= 0 && y < SIZE) ? { x, y } : null;
+}
+cv.addEventListener("click", e => {
+  const c = eventCell(e);
+  if (c) humanMove(c.x, c.y);
+});
+cv.addEventListener("mousemove", e => {
+  const c = eventCell(e);
+  const ng = c && state.game.at(c.x, c.y) === EMPTY ? c : null;
+  if ((ng && (!state.ghost || ng.x !== state.ghost.x || ng.y !== state.ghost.y)) ||
+      (!ng && state.ghost)){
+    state.ghost = ng;
+    if (!state.animating) redraw();
+  }
+});
+cv.addEventListener("mouseleave", () => { state.ghost = null; if (!state.animating) redraw(); });
+
+$("segMode").addEventListener("click", e => {
+  const b = e.target.closest("button");
+  if (!b || b.dataset.v === state.mode) return;
+  state.mode = b.dataset.v;
+  [...$("segMode").children].forEach(x => x.classList.toggle("on", x === b));
+  document.body.classList.toggle("pvp", state.mode === "pvp");
+  $("modeHint").textContent = state.mode === "pvp"
+    ? "同屏轮流落子：黑方先行，先连成五子者胜。"
+    : "与 AI 对弈，你可选执黑或执白。";
+  newGame();
+});
+$("segLevel").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  state.level = +b.dataset.v;
+  [...$("segLevel").children].forEach(x => x.classList.toggle("on", x === b));
+  $("levelHint").textContent = [
+    "松懈防守：偶尔失误，适合热身。",
+    "攻守平衡：会防活三、冲四，并制造双威胁。",
+    "深度计算：4 层 α-β 搜索，善用四三连接与双三攻势。",
+  ][state.level - 1];
+  updatePanel();
+});
+$("segColor").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  state.humanColor = +b.dataset.v === 1 ? BLACK : WHITE;
+  [...$("segColor").children].forEach(x => x.classList.toggle("on", x === b));
+  newGame();
+});
+$("btnNew").addEventListener("click", newGame);
+$("btnAgain").addEventListener("click", newGame);
+$("btnUndo").addEventListener("click", undoMove);
+$("btnReview").addEventListener("click", () => { elOverlay.classList.remove("show"); undoMove(); });
+$("btnMute").addEventListener("click", () => {
+  state.muted = !state.muted;
+  $("btnMute").textContent = state.muted ? "🔇" : "🔊";
+});
+
+/* 回放控制 */
+$("rpFirst").addEventListener("click", () => setReplayIdx(0, true));
+$("rpPrev").addEventListener("click", () => stepReplay(-1));
+$("rpNext").addEventListener("click", () => stepReplay(1));
+$("rpLast").addEventListener("click", () => {
+  const rp = state.replay;
+  if (rp) setReplayIdx(rp.rec.moves.length, true);
+});
+$("rpPlay").addEventListener("click", toggleAutoPlay);
+$("rpExit").addEventListener("click", exitReplay);
+$("rpSpeed").addEventListener("click", () => {
+  const rp = state.replay;
+  if (!rp) return;
+  rp.speed = (rp.speed + 1) % SPEEDS.length;
+  $("rpSpeed").textContent = SPEEDS[rp.speed].label;
+  if (rp.playing){ stopAutoPlay(); toggleAutoPlay(); }   // 立刻按新速度继续
+});
+$("rpRange").addEventListener("input", e => setReplayIdx(+e.target.value, true));
+window.addEventListener("keydown", e => {
+  if (!state.replay) return;
+  if (e.key === "ArrowLeft"){ stepReplay(-1); e.preventDefault(); }
+  else if (e.key === "ArrowRight"){ stepReplay(1); e.preventDefault(); }
+  else if (e.key === " "){ toggleAutoPlay(); e.preventDefault(); }
+});
+
+/* 记录清空（两段式确认） */
+let clearRecTimer = null;
+$("btnClearRec").addEventListener("click", () => {
+  const b = $("btnClearRec");
+  if (b.dataset.arm !== "1"){
+    b.dataset.arm = "1";
+    b.textContent = "确认清空？";
+    clearRecTimer = setTimeout(() => { b.dataset.arm = ""; b.textContent = "清空"; }, 2500);
+    return;
+  }
+  clearTimeout(clearRecTimer);
+  b.dataset.arm = "";
+  state.records = [];
+  persistRecords();
+  renderRecords();
+});
+
+/* 供自动化测试使用 */
+window.__g = {
+  game: state.game, state, humanMove, newGame, undoMove,
+  startReplay, exitReplay, renderRecords,
+  debugPlace: (x, y, c) => { state.game.place(x, y, c); redraw(); updatePanel(); },
+};
+
+renderRecords();
+updatePanel();
+redraw();
+</script>
+</body>
+</html>
