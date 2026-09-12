@@ -181,6 +181,8 @@
         <button data-v="3">大师</button>
         <button data-v="4">宗师</button>
         <button data-v="5">棋圣</button>
+        <button data-v="6">棋仙</button>
+        <button data-v="7">棋神</button>
       </div>
       <div class="hint" id="levelHint">攻守平衡：会防活三、冲四，并制造双威胁。</div>
     </div>
@@ -460,8 +462,8 @@ function randomEmpty(g){
 }
 
 /* AI 主入口：精确战术优先（成五 / 挡五），其余交给搜索
- * level: 1 入门(贪心+随机)  2 进阶(2层)  3 大师(4层+延伸)
- *        4 宗师(6层迭代加深+延伸)  5 棋圣(8层迭代加深，5秒长考) */
+ * level: 1 入门  2 进阶  3 大师  4 宗师  5 棋圣  6 棋仙  7 棋神
+ *        4 以上为迭代加深 + 时间上限 + 杀棋延伸，详见 5b 分支配置表 */
 function chooseAiMove(g, aiColor, level){
   const foe = opp(aiColor);
 
@@ -494,16 +496,21 @@ function chooseAiMove(g, aiColor, level){
     return cands[1 + Math.floor(Math.random() * Math.min(cands.length - 1, 3))];
   }
 
-  /* 5b. 宗师/棋圣：迭代加深 + 时间上限，深度完成才采纳该层结果 */
+  /* 5b. 宗师及以上：迭代加深 + 时间上限，深度完成才采纳该层结果
+   *      k=根候选数  t=思考时间上限  ext=杀棋延伸层数  depths=迭代加深序列 */
   if (level >= 4){
-    const grand = level >= 5;
+    const cfg = [
+      { k: 16, t: 2000,  ext: 8,  depths: [2, 4, 6] },          // 宗师
+      { k: 20, t: 5000,  ext: 12, depths: [2, 4, 6, 8] },       // 棋圣
+      { k: 24, t: 8000,  ext: 16, depths: [2, 4, 6, 8, 10] },   // 棋仙
+      { k: 30, t: 12000, ext: 20, depths: [2, 4, 6, 8, 10, 12] }, // 棋神
+    ][level - 4];
     nodeCap = Infinity;
     nodeCount = 0; timedOut = false;
-    const cands = genCandidates(g, aiColor, grand ? 20 : 16);
-    const deadline = Date.now() + (grand ? 5000 : 2000);
-    const ext = grand ? 12 : 8;
+    const cands = genCandidates(g, aiColor, cfg.k);
+    const deadline = Date.now() + cfg.t;
     let best = cands[0], bestVal = -Infinity;
-    for (const d of (grand ? [2, 4, 6, 8] : [2, 4, 6])){
+    for (const d of cfg.depths){
       searchDeadline = deadline; timedOut = false;
       let curBest = null, curVal = -Infinity, alpha = -Infinity;
       const vals = [];
@@ -511,7 +518,7 @@ function chooseAiMove(g, aiColor, level){
         g.place(cd.x, cd.y, aiColor);
         let val;
         if (g.winLine(cd.x, cd.y)) val = WIN_SCORE + d * 1000;
-        else val = -negamax(g, d - 1, -Infinity, -alpha, foe, ext);
+        else val = -negamax(g, d - 1, -Infinity, -alpha, foe, cfg.ext);
         g.undo();
         vals.push(val);
         if (val > curVal){ curVal = val; curBest = cd; }
@@ -926,7 +933,7 @@ function recResultText(r){
 }
 function recMetaText(r){
   const d = new Date(r.ts), p = n => String(n).padStart(2, "0");
-  const mode = r.mode === "pvp" ? "双人" : r.mode === "online" ? "在线" : "人机·" + ["", "入门", "进阶", "大师", "宗师", "棋圣"][r.level || 2];
+  const mode = r.mode === "pvp" ? "双人" : r.mode === "online" ? "在线" : "人机·" + ["", "入门", "进阶", "大师", "宗师", "棋圣", "棋仙", "棋神"][r.level || 2];
   return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())} · ${mode} · ${r.moves.length} 手`;
 }
 function renderRecords(){
@@ -1486,6 +1493,8 @@ $("segLevel").addEventListener("click", e => {
     "深度计算：4 层 α-β 搜索 + 杀棋延伸，善用四三连接与双三攻势。",
     "宗师：6 层迭代加深 + 杀棋延伸，算杀更深、防反更密，思维时间也更长。",
     "棋圣：8 层迭代加深，5 秒长考深算连续攻杀，最强档位，慎选。",
+    "棋仙：10 层迭代加深，8 秒长考，殚精竭虑，几无破绽。",
+    "棋神：12 层迭代加深，最长 12 秒长考，凡人不可战胜之神。",
   ][state.level - 1];
   updatePanel();
 });
