@@ -775,6 +775,7 @@ function doPlace(x, y, c){
   sfx("place");
   redraw();
   updatePanel();
+  saveLive();
 }
 
 function humanMove(x, y){
@@ -819,6 +820,7 @@ function finishCheck(){
       (pvp ? g.moves.length > 0 : g.moves.some(m => m.c === state.humanColor)) ? "" : "none";
     elOverlay.classList.add("show");
     sfx(pvp || humanWon ? "win" : "lose");
+    saveLive();
     return true;
   }
   if (g.moves.length >= SIZE * SIZE){
@@ -832,6 +834,7 @@ function finishCheck(){
     $("btnReview").style.display = "none";
     elOverlay.classList.add("show");
     sfx("draw");
+    saveLive();
     return true;
   }
   return false;
@@ -866,6 +869,7 @@ function newGame(){
   state.anims = []; state.ghost = null;
   elOverlay.classList.remove("show");
   updatePanel(); redraw();
+  saveLive();
   if (state.mode === "ai" && state.humanColor === WHITE) scheduleAi();
 }
 
@@ -887,6 +891,7 @@ function undoMove(){
     if (g.moves.length && g.moves[g.moves.length - 1].c === state.humanColor) g.undo();
   }
   updatePanel(); redraw();
+  saveLive();
 }
 
 /* ---------- 落子提示 ---------- */
@@ -1127,6 +1132,7 @@ async function netJoin(){
       seats: (data.state && data.state.seats) || null,
       specCount: data.specCount || 0,
     };
+    saveLive();
     input.disabled = true;
     $("btnJoinRoom").textContent = "退出房间";
     connectEvents();
@@ -1150,6 +1156,7 @@ function netLeave(silent){
   $("roomInput").disabled = false;
   $("btnJoinRoom").textContent = "加入";
   if (!silent) newGame();
+  saveLive();
   refreshOnlineHint(); updatePanel(); redraw();
 }
 function connectEvents(){
@@ -1223,6 +1230,7 @@ function applyNetState(st, animateLast){
     startAnim(m[0], m[1], m[2]);
   }
   redraw();
+  saveLive();
   return grew;
 }
 /* 对局结束（由服务器广播状态触发）：存档 + 战报 */
@@ -1255,6 +1263,15 @@ function handleNetMsg(msg){
     : !!o.seats[oppColor];
 
   switch (msg.type){
+    case "replaced":                     // 本对局已在其他窗口打开：旧窗口让位
+      try { if (o.es) o.es.close(); } catch (e) {}
+      state.online = null;
+      $("undoAsk").classList.remove("show");
+      $("roomInput").disabled = false;
+      $("btnJoinRoom").textContent = "加入";
+      setOnlineHint("该对局已在其他窗口打开，此处已退出");
+      newGame();
+      return;
     case "spec":
       refreshOnlineHint(); updatePanel();
       return;
@@ -1320,9 +1337,102 @@ async function netTakeSeat(){
     if (!resp.ok || d.error){ setOnlineHint(d.error || "加入失败"); setTimeout(refreshOnlineHint, 1500); return; }
     o.myColor = d.color;
     o.role = "player";
+    saveLive();
     try { if (o.es) o.es.close(); } catch (e) {}
     connectEvents();                                    // 以玩家身份重新订阅
   } catch (e) { setOnlineHint("网络错误，请稍后再试"); }
+}
+
+/* ---------- 退出后自动续上 ---------- */
+const LIVE_KEY = "gomoku_live_v1";
+function getTabKey(){   // 标签页指纹：刷新保留、关闭即失，用于避免多标签页抢占会话
+  let k = sessionStorage.getItem("gmk_tab");
+  if (!k){ k = Math.random().toString(36).slice(2, 10); try { sessionStorage.setItem("gmk_tab", k); } catch (e) {} }
+  return k;
+}
+function saveLive(){
+  try {
+    const g = state.game;
+    localStorage.setItem(LIVE_KEY, JSON.stringify({
+      ts: Date.now(), mode: state.mode, level: state.level, humanColor: state.humanColor,
+      moves: g.moves.map(m => [m.x, m.y, m.c]),
+      winner: g.winner || 0, draw: !!g.draw, over: !!state.over, winCells: g.winCells || null,
+      recSaved: !!state.recSaved, tabKey: getTabKey(),
+      online: state.online ? { roomId: state.online.roomId, token: state.online.token,
+                               role: state.online.role, myColor: state.online.myColor } : null,
+    }));
+  } catch (e) { /* 存储不可用时静默跳过 */ }
+}
+function loadLive(){
+  try { return JSON.parse(localStorage.getItem(LIVE_KEY) || "null"); } catch (e) { return null; }
+}
+function clearLive(){ try { localStorage.removeItem(LIVE_KEY); } catch (e) {} }
+
+const MODE_HINTS = {
+  ai: "与 AI 对弈，你可选执黑或执白。",
+  pvp: "同屏轮流落子：黑方先行，先连成五子者胜。",
+  online: "输入相同房间号匹配对手；需先运行 node gomoku-server.js。",
+};
+const LEVEL_HINTS = [
+  "松懈防守：偶尔失误，适合热身。",
+  "攻守平衡：会防活三、冲四，并制造双威胁。",
+  "深度计算：4 层 α-β 搜索 + 杀棋延伸，善用四三连接与双三攻势。",
+  "宗师：6 层迭代加深 + 杀棋延伸，算杀更深、防反更密，思维时间也更长。",
+  "棋圣：8 层迭代加深，5 秒长考深算连续攻杀，最强档位，慎选。",
+  "棋仙：10 层迭代加深，8 秒长考，殚精竭虑，几无破绽。",
+  "棋神：12 层迭代加深，最长 12 秒长考，凡人不可战胜之神。",
+];
+
+function applyModeUi(){          // 恢复/切换后同步分段控件与 body class
+  [...$("segMode").children].forEach(b => b.classList.toggle("on", b.dataset.v === state.mode));
+  [...$("segLevel").children].forEach(b => b.classList.toggle("on", +b.dataset.v === state.level));
+  document.body.classList.remove("mode-ai", "mode-pvp", "mode-online");
+  document.body.classList.add("mode-" + state.mode);
+  $("modeHint").textContent = MODE_HINTS[state.mode];
+  $("levelHint").textContent = LEVEL_HINTS[state.level - 1];
+}
+
+function tryResume(){            // 页面加载时恢复上次对局
+  const s = loadLive();
+  if (!s || !Array.isArray(s.moves)) return false;
+  const hasOnline = !!(s.online && s.online.token && s.online.roomId);
+  if (!hasOnline && s.over){ clearLive(); return false; }   // 已结束的本地对局不再恢复
+  state.mode = ["ai", "pvp", "online"].includes(s.mode) ? s.mode : "ai";
+  state.level = s.level >= 1 && s.level <= 7 ? s.level : 2;
+  state.humanColor = s.humanColor === WHITE ? WHITE : BLACK;
+  applyModeUi();
+  const g = state.game;
+  g.reset();
+  for (const m of s.moves) if (g.inB(m[0], m[1]) && g.at(m[0], m[1]) === EMPTY) g.place(m[0], m[1], m[2]);
+  g.winner = s.winner || 0; g.draw = !!s.draw; g.winCells = s.winCells || null;
+  state.over = !!s.over;
+  state.recSaved = !!s.recSaved;
+  {   // 存档自洽校验：防止旧存档漏记胜负
+    const last = g.moves[g.moves.length - 1];
+    if (last && !state.over){
+      const wl = g.winLine(last.x, last.y);
+      if (wl){ g.winner = last.c; g.winCells = wl; state.over = true; }
+      else if (g.moves.length >= SIZE * SIZE){ g.draw = true; state.over = true; }
+    }
+  }
+  if (state.mode === "online" && hasOnline && s.tabKey === getTabKey()){
+    state.online = { roomId: s.online.roomId, token: s.online.token, role: s.online.role || "player",
+                     myColor: s.online.myColor || 0, connected: false, oppJoined: false, es: null,
+                     seats: null, specCount: 0 };
+    $("roomInput").value = s.online.roomId;
+    $("roomInput").disabled = true;
+    $("btnJoinRoom").textContent = "退出房间";
+    connectEvents();             // 以服务器状态为准：init 重建棋盘，会话失效则自动清理
+  } else {
+    if (state.mode === "online" && hasOnline){
+      $("roomInput").value = s.online.roomId;   // 非属主窗口：预填房间号供手动重进
+      saveLive();                               // 该窗口此后接管存档
+    }
+    if (state.mode === "ai" && !state.over && currentColor() !== state.humanColor){
+      scheduleAi();              // 续上时恰轮到 AI：自动续下
+    }
+  }
+  return true;
 }
 
 /* ---------- 面板 ---------- */
@@ -1476,26 +1586,15 @@ $("segMode").addEventListener("click", e => {
   [...$("segMode").children].forEach(x => x.classList.toggle("on", x === b));
   document.body.classList.remove("mode-ai", "mode-pvp", "mode-online");
   document.body.classList.add("mode-" + v);
-  $("modeHint").textContent = {
-    ai: "与 AI 对弈，你可选执黑或执白。",
-    pvp: "同屏轮流落子：黑方先行，先连成五子者胜。",
-    online: "输入相同房间号匹配对手；需先运行 node gomoku-server.js。",
-  }[v];
+  $("modeHint").textContent = MODE_HINTS[v];
   newGame();
 });
 $("segLevel").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
   state.level = +b.dataset.v;
   [...$("segLevel").children].forEach(x => x.classList.toggle("on", x === b));
-  $("levelHint").textContent = [
-    "松懈防守：偶尔失误，适合热身。",
-    "攻守平衡：会防活三、冲四，并制造双威胁。",
-    "深度计算：4 层 α-β 搜索 + 杀棋延伸，善用四三连接与双三攻势。",
-    "宗师：6 层迭代加深 + 杀棋延伸，算杀更深、防反更密，思维时间也更长。",
-    "棋圣：8 层迭代加深，5 秒长考深算连续攻杀，最强档位，慎选。",
-    "棋仙：10 层迭代加深，8 秒长考，殚精竭虑，几无破绽。",
-    "棋神：12 层迭代加深，最长 12 秒长考，凡人不可战胜之神。",
-  ][state.level - 1];
+  $("levelHint").textContent = LEVEL_HINTS[state.level - 1];
+  saveLive();
   updatePanel();
 });
 $("segColor").addEventListener("click", e => {
@@ -1519,7 +1618,7 @@ $("undoNo").addEventListener("click", () => { $("undoAsk").classList.remove("sho
 $("btnJoinRoom").addEventListener("click", () => { state.online ? netLeave() : netJoin(); });
 $("btnRandRoom").addEventListener("click", () => { $("roomInput").value = String(1000 + Math.floor(Math.random() * 9000)); });
 $("roomInput").addEventListener("keydown", e => { if (e.key === "Enter" && !state.online) netJoin(); });
-window.addEventListener("beforeunload", () => { if (state.online) netLeave(true); });
+/* 关闭/刷新页面时不主动退出：SSE 断开有 8 秒宽限，配合 localStorage 会话实现“退出后自动续上” */
 $("btnHint").addEventListener("click", showHint);
 window.addEventListener("keydown", e => {
   if (e.key === "h" || e.key === "H"){
@@ -1582,11 +1681,12 @@ $("btnClearRec").addEventListener("click", () => {
 window.__g = {
   game: state.game, state, humanMove, newGame, undoMove,
   startReplay, exitReplay, renderRecords,
-  netJoin, netLeave, restartGame,
+  netJoin, netLeave, restartGame, saveLive,
   debugPlace: (x, y, c) => { state.game.place(x, y, c); redraw(); updatePanel(); },
 };
 
 renderRecords();
+tryResume();
 updatePanel();
 redraw();
 </script>

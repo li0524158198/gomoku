@@ -162,6 +162,10 @@ const server = http.createServer((req, res) => {
       if (color){
         const p = r.players[color];
         if (p.detachTimer){ clearTimeout(p.detachTimer); p.detachTimer = null; }
+        if (p.res && p.res !== res){          // 同一座位被另一窗口接管：通知旧窗口让位
+          writeEvent(p.res, "replaced", {});
+          try { p.res.end(); } catch (e) {}
+        }
         p.res = res;
         send(p, "init", { you: color, state: stateOf(r) });
         broadcast(r, "join", { who: color });
@@ -179,6 +183,10 @@ const server = http.createServer((req, res) => {
         });
       } else {
         const s = r.spectators.get(token);
+        if (s.res && s.res !== res){
+          writeEvent(s.res, "replaced", {});
+          try { s.res.end(); } catch (e) {}
+        }
         s.res = res;
         writeEvent(res, "init", { you: 0, state: stateOf(r) });
         const ping = setInterval(() => { try { res.write(":ping\n\n"); } catch (e) {} }, 25000);
