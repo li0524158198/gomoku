@@ -109,7 +109,18 @@
     body { padding: 12px; }
     .panel { width: min(628px, calc(100vw - 48px)); }
   }
-  body.pvp .ai-only { display: none; }
+  body.mode-pvp .ai-only, body.mode-online .ai-only { display: none; }
+  body.mode-ai .online-only, body.mode-pvp .online-only { display: none; }
+
+  .online-row { display: flex; gap: 8px; }
+  #roomInput { flex: 1; min-width: 0; background: #191e29; border: 1px solid #323a4c; color: #e9e7e2;
+               border-radius: 8px; padding: 8px 10px; font-size: 14px; font-family: inherit; outline: none; }
+  #roomInput:focus { border-color: #e8b04b; }
+  #roomInput:disabled { opacity: .6; }
+  #undoAsk { display: none; margin-top: 10px; align-items: center; gap: 8px; font-size: 13px; color: #e8d5a8;
+             background: rgba(232,176,75,.12); border: 1px solid rgba(232,176,75,.45); padding: 8px 10px; border-radius: 8px; }
+  #undoAsk.show { display: flex; }
+  #undoAsk span { flex: 1; }
 </style>
 </head>
 <body>
@@ -157,6 +168,7 @@
       <div class="seg" id="segMode">
         <button data-v="ai" class="on">人机对弈</button>
         <button data-v="pvp">双人对战</button>
+        <button data-v="online">在线对战</button>
       </div>
       <div class="hint" id="modeHint">与 AI 对弈，你可选执黑或执白。</div>
     </div>
@@ -180,6 +192,17 @@
       <div class="hint">切换后立即开始新对局（黑棋先行，无禁手）。</div>
     </div>
 
+    <div class="card online-only">
+      <h3>在线对战</h3>
+      <div class="online-row">
+        <input id="roomInput" placeholder="房间号（1-8 位）" maxlength="8" autocomplete="off">
+        <button class="btn small" id="btnRandRoom" title="随机房间号">🎲</button>
+        <button class="btn small primary" id="btnJoinRoom">加入</button>
+      </div>
+      <div class="hint" id="onlineHint">两位玩家输入相同房间号即可匹配：先加入的执黑先行。</div>
+      <div id="undoAsk"><span>对方请求悔棋，是否同意？</span><button class="btn small" id="undoYes">同意</button><button class="btn small" id="undoNo">拒绝</button></div>
+    </div>
+
     <div class="card">
       <div id="recHead"><span>对局记录</span><button id="btnClearRec">清空</button></div>
       <div id="recordList"></div>
@@ -198,7 +221,9 @@
       <b>玩法</b>：点击棋盘交叉点落子，任意方向先连成五子者胜（五连以上同样有效）。<br>
       <b>悔棋</b>：人机模式撤销你与 AI 各一手；双人模式撤销最后一手。<br>
       <b>回放</b>：每局结束自动存档（本机保存最近 50 局），点击记录可回放——空格播放，←/→ 单步。<br>
-      <b>提示</b>：卡住时点「💡 提示」或按 H，金圈标出推荐落点（按大师级计算）。
+      <b>提示</b>：卡住时点「💡 提示」或按 H，金圈标出推荐落点（按大师级计算）。<br>
+      <b>在线对战</b>：先运行 <b>node gomoku-server.js</b> 启动服务器，两人打开页面选「在线对战」，
+      输入相同房间号即匹配，先加入者执黑；悔棋需对方同意。
     </div>
   </div>
 </div>
@@ -477,8 +502,9 @@ window.addEventListener("resize", () => { setupCanvas(); redraw(); });
 
 const state = {
   game: new Game(),
-  mode: "ai",          // "ai" 人机对弈 | "pvp" 双人对战
+  mode: "ai",          // "ai" 人机对弈 | "pvp" 双人对战 | "online" 在线对战
   humanColor: BLACK,
+  online: null,        // 在线状态 { roomId, token, myColor, connected, oppJoined, es }
   hint: null,          // 提示点 { x, y }（轮到玩家落子时显示金圈）
   replay: null,        // 回放状态 { rec, idx, playing, speed, timer }
   snapshot: null,      // 进入回放前的对局快照，退出时恢复
@@ -618,7 +644,9 @@ function redraw(now = performance.now()){
   if (state.hint) drawHint();
   const curC = currentColor();
   const canGhost = !state.over && !state.thinking && !state.replay &&
-                   (state.mode === "pvp" || curC === state.humanColor);
+    (state.mode === "pvp" ||
+     (state.mode === "ai" && curC === state.humanColor) ||
+     (state.mode === "online" && state.online && state.online.oppJoined && curC === state.online.myColor));
   if (state.ghost && canGhost && g.at(state.ghost.x, state.ghost.y) === EMPTY){
     drawStone(state.ghost.x, state.ghost.y, curC, 1, true);
   }
@@ -679,6 +707,13 @@ function humanMove(x, y){
   const g = state.game;
   if (state.replay) return;
   state.hint = null;                      // 落子后提示失效
+  if (state.mode === "online"){           // 在线：上报服务器，以服务器广播为准
+    const o = state.online;
+    if (!o || !o.connected || !o.oppJoined || state.over) return;
+    if (currentColor() !== o.myColor || g.at(x, y) !== EMPTY) return;
+    netMove(x, y);
+    return;
+  }
   const pvp = state.mode === "pvp";
   if (state.over || state.thinking) return;
   if (!pvp && currentColor() !== state.humanColor) return;
@@ -785,11 +820,13 @@ function showHint(){
   const g = state.game;
   if (state.replay || state.over || state.thinking) return;
   if (state.mode === "ai" && currentColor() !== state.humanColor) return;
+  if (state.mode === "online" && (!state.online || !state.online.oppJoined || currentColor() !== state.online.myColor)) return;
   if (g.moves.length >= SIZE * SIZE) return;
   elLast.textContent = "正在计算提示…";
   setTimeout(() => {
     if (state.replay || state.over || state.thinking) return;
     if (state.mode === "ai" && currentColor() !== state.humanColor) return;
+    if (state.mode === "online" && (!state.online || !state.online.oppJoined || currentColor() !== state.online.myColor)) return;
     const mv = chooseAiMove(g, currentColor(), 3);        // 大师级计算
     if (!mv || g.at(mv.x, mv.y) !== EMPTY) return;
     state.hint = mv;
@@ -815,11 +852,12 @@ function persistRecords(){
 function recResultText(r){
   if (r.result === "draw") return "🤝 平局";
   if (r.mode === "pvp") return r.result === "black" ? "⚫ 黑方胜" : "⚪ 白方胜";
+  if (r.mode === "online") return r.result === "win" ? "🏆 你获胜" : "😔 对方获胜";
   return r.result === "win" ? "🏆 你获胜" : "🤖 AI 获胜";
 }
 function recMetaText(r){
   const d = new Date(r.ts), p = n => String(n).padStart(2, "0");
-  const mode = r.mode === "pvp" ? "双人" : "人机·" + ["", "入门", "进阶", "大师"][r.level || 2];
+  const mode = r.mode === "pvp" ? "双人" : r.mode === "online" ? "在线" : "人机·" + ["", "入门", "进阶", "大师"][r.level || 2];
   return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())} · ${mode} · ${r.moves.length} 手`;
 }
 function renderRecords(){
@@ -847,14 +885,22 @@ function saveRecord(){
   let result;
   if (g.draw) result = "draw";
   else if (state.mode === "pvp") result = g.winner === BLACK ? "black" : "white";
+  else if (state.mode === "online") result = g.winner === (state.online ? state.online.myColor : BLACK) ? "win" : "lose";
   else result = g.winner === state.humanColor ? "win" : "lose";
+  const sigMoves = g.moves.map(m => [m.x, m.y, m.c]);
+  /* 同一浏览器多标签对弈时会各自收到终局广播：内容相同只存一条 */
+  if (state.records[0] && state.records[0].moves.length === sigMoves.length &&
+      JSON.stringify(state.records[0].moves) === JSON.stringify(sigMoves)){
+    state.recSaved = true;
+    return;
+  }
   state.records.unshift({
     ts: Date.now(),
     mode: state.mode,
     level: state.level,
-    humanColor: state.humanColor,
+    humanColor: state.mode === "online" ? (state.online ? state.online.myColor : BLACK) : state.humanColor,
     result,
-    moves: g.moves.map(m => [m.x, m.y, m.c]),
+    moves: sigMoves,
   });
   if (state.records.length > REC_MAX) state.records.length = REC_MAX;
   state.recSaved = true;
@@ -971,6 +1017,198 @@ function stopReplayOnly(){                      // newGame 用：不恢复快照
   document.body.classList.remove("replaying");
 }
 
+/* ---------- 在线对战 ---------- */
+const NET_BASE = location.protocol.startsWith("http") ? "" : "http://127.0.0.1:3000";
+function setOnlineHint(t){ $("onlineHint").textContent = t; }
+function refreshOnlineHint(){
+  const o = state.online;
+  if (!o) return setOnlineHint("两位玩家输入相同房间号即可匹配：先加入的执黑先行。");
+  if (!o.connected) return setOnlineHint("连接中断，正在重连…");
+  if (!o.oppJoined) return setOnlineHint(`房间 ${o.roomId} 已就绪 · 等待对手加入（你执${o.myColor === BLACK ? "黑先行" : "白后手"}）`);
+  setOnlineHint(`房间 ${o.roomId} · 你执${o.myColor === BLACK ? "黑先行" : "白后手"}${state.over ? " · 对局已结束" : " · 对局中"}`);
+}
+async function netJoin(){
+  if (state.online) return;
+  const input = $("roomInput");
+  let id = input.value.trim().replace(/[^0-9A-Za-z]/g, "").slice(0, 8);
+  if (!id) id = String(1000 + Math.floor(Math.random() * 9000));
+  input.value = id;
+  setOnlineHint(`正在加入房间 ${id} …`);
+  try {
+    const resp = await fetch(`${NET_BASE}/api/room/${id}/join`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok){ setOnlineHint(data.error || "加入失败"); return; }
+    state.online = { roomId: data.roomId, token: data.token, myColor: data.color, connected: false, oppJoined: false, es: null };
+    input.disabled = true;
+    $("btnJoinRoom").textContent = "退出房间";
+    connectEvents();
+  } catch (e) {
+    setOnlineHint("无法连接服务器——请先在本目录运行：node gomoku-server.js");
+  }
+}
+function netLeave(silent){
+  const o = state.online;
+  if (!o) return;
+  try { if (o.es) o.es.close(); } catch (e) {}
+  try {
+    fetch(`${NET_BASE}/api/room/${o.roomId}/action`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: o.token, type: "leave" }), keepalive: true,
+    });
+  } catch (e) {}
+  state.online = null;
+  state.recSaved = false;
+  $("undoAsk").classList.remove("show");
+  $("roomInput").disabled = false;
+  $("btnJoinRoom").textContent = "加入";
+  if (!silent) newGame();
+  refreshOnlineHint(); updatePanel(); redraw();
+}
+function connectEvents(){
+  const o = state.online;
+  if (!o) return;
+  const es = new EventSource(`${NET_BASE}/api/room/${o.roomId}/events?token=${o.token}`);
+  o.es = es;
+  es.onopen = () => { o.connected = true; refreshOnlineHint(); updatePanel(); };
+  es.onerror = () => {
+    o.connected = false;
+    setOnlineHint("连接中断，正在重连…");
+    updatePanel();
+    scheduleReconnectCheck();
+  };
+  es.onmessage = e => { try { handleNetMsg(JSON.parse(e.data)); } catch (err) {} };
+}
+let reconnectTimer = null;
+function scheduleReconnectCheck(){
+  if (reconnectTimer || !state.online || state.online.connected) return;
+  reconnectTimer = setTimeout(async () => {
+    reconnectTimer = null;
+    const o = state.online;
+    if (!o || o.connected) return;
+    try {
+      const resp = await fetch(`${NET_BASE}/api/room/${o.roomId}/peek?token=${o.token}`);
+      if (!resp.ok){
+        state.online = null;
+        $("roomInput").disabled = false;
+        $("btnJoinRoom").textContent = "加入";
+        setOnlineHint("房间已失效，请重新加入");
+        newGame();
+        return;
+      }
+    } catch (e) { /* 服务器暂不可达，继续等待 SSE 重连 */ }
+    scheduleReconnectCheck();
+  }, 3000);
+}
+function netMove(x, y){
+  const o = state.online;
+  if (!o) return;
+  fetch(`${NET_BASE}/api/room/${o.roomId}/move`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token: o.token, x, y }),
+  }).then(r => r.json()).then(d => {
+    if (d.error){ setOnlineHint(d.error); setTimeout(refreshOnlineHint, 1500); }
+  }).catch(() => {});
+}
+function netAction(payload){
+  const o = state.online;
+  if (!o) return;
+  fetch(`${NET_BASE}/api/room/${o.roomId}/action`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token: o.token, ...payload }),
+  }).then(r => r.json()).then(d => {
+    if (d.error){ setOnlineHint(d.error); setTimeout(refreshOnlineHint, 1500); }
+  }).catch(() => {});
+}
+/* 以服务器状态为准重建本地棋盘，返回是否带来了新棋子 */
+function applyNetState(st, animateLast){
+  const g = state.game;
+  const grew = animateLast && st.moves.length > g.moves.length;
+  g.reset();
+  for (const m of st.moves) g.place(m[0], m[1], m[2]);
+  g.winner = st.winner || 0;
+  g.winCells = st.winCells || null;
+  g.draw = !!st.draw;
+  state.over = !!(g.winner || g.draw);
+  state.anims = []; state.ghost = null; state.hint = null;
+  if (grew){
+    const m = st.moves[st.moves.length - 1];
+    startAnim(m[0], m[1], m[2]);
+  }
+  redraw();
+  return grew;
+}
+/* 对局结束（由服务器广播状态触发）：存档 + 战报 */
+function checkNetEnd(){
+  const g = state.game, o = state.online;
+  if (!o || !state.over) return;
+  saveRecord();
+  const iWon = !g.draw && g.winner === o.myColor;
+  elOvTitle.textContent = g.draw ? "🤝 平局" : (iWon ? "🏆 你赢了！" : "😔 对方获胜");
+  elOvSub.innerHTML = (g.winCells
+    ? `${g.winner === BLACK ? "黑棋" : "白棋"}五连：` + g.winCells.map(([x, y]) => coordName(x, y)).join(" · ") + "<br>"
+    : "") + `共 ${g.moves.length} 手 · 已存入对局记录`;
+  $("btnReview").style.display = g.moves.length ? "" : "none";
+  elOverlay.classList.add("show");
+  sfx(g.draw ? "draw" : (iWon ? "win" : "lose"));
+}
+function handleNetMsg(msg){
+  const o = state.online;
+  if (!o) return;
+  const st = msg.state || {};
+  const seats = st.seats || {};
+  const oppColor = opp(o.myColor);
+  const oppNow = !!seats[oppColor];
+
+  switch (msg.type){
+    case "init":
+      o.myColor = msg.you;
+      o.oppJoined = oppNow;
+      applyNetState(st);
+      break;
+    case "join":
+      o.oppJoined = oppNow;
+      applyNetState(st);
+      break;
+    case "leave":
+      o.oppJoined = oppNow;
+      $("undoAsk").classList.remove("show");
+      applyNetState(st);
+      break;
+    case "move":
+      if (applyNetState(st, true)) sfx("place");
+      checkNetEnd();
+      break;
+    case "restart":
+      state.recSaved = false;
+      elOverlay.classList.remove("show");
+      applyNetState(st);
+      break;
+    case "undoRequest":
+      if (msg.by !== o.myColor){ $("undoAsk").classList.add("show"); sfx("place"); }
+      else setOnlineHint("已发送悔棋请求，等待对方回应…");
+      refreshOnlineHint(); updatePanel();
+      return;
+    case "undo":
+      state.recSaved = false;
+      $("undoAsk").classList.remove("show");
+      elOverlay.classList.remove("show");
+      applyNetState(st);
+      break;
+    case "undoDeclined":
+      $("undoAsk").classList.remove("show");
+      setOnlineHint("对方拒绝了悔棋请求");
+      refreshOnlineHint(); updatePanel();
+      return;
+    default:
+      return;
+  }
+  refreshOnlineHint(); updatePanel(); redraw();
+}
+function restartGame(){
+  if (state.mode === "online" && state.online){ netAction({ type: "restart" }); return; }
+  newGame();
+}
+
 /* ---------- 面板 ---------- */
 function statusText(){
   const g = state.game, pvp = state.mode === "pvp";
@@ -999,27 +1237,52 @@ function updatePanel(){
   const g = state.game, cur = currentColor(), pvp = state.mode === "pvp";
   if (state.replay){
     const rp = state.replay, n = rp.rec.moves.length;
-    const isPvpRec = rp.rec.mode === "pvp";
+    const recMode = rp.rec.mode || "ai";
+    const recMy = recMode === "pvp" ? BLACK : (rp.rec.humanColor ?? BLACK);
     elStatus.classList.remove("thinking");
     elStatus.textContent = state.over
       ? (g.draw ? "回放结束 · 平局" : `回放结束 · ${g.winner === BLACK ? "黑棋" : "白棋"}胜`)
       : `▶ 回放中 · 第 ${rp.idx}/${n} 手`;
     const last = rp.idx > 0 ? rp.rec.moves[rp.idx - 1] : null;
-    elLast.textContent = last
-      ? `${last[2] === BLACK ? "黑方" : "白方"}落子 ${coordName(last[0], last[1])}`
-      : "回到开局";
-    const myColor = isPvpRec ? BLACK : rp.rec.humanColor;
-    $("chipHuman").classList.toggle("active", !state.over && cur === myColor);
-    $("chipAi").classList.toggle("active", !state.over && cur !== myColor);
-    $("chipHumanName").textContent = isPvpRec ? "黑方" : "你";
-    $("chipAiName").textContent = isPvpRec ? "白方" : "AI";
-    $("chipHumanTag").textContent = isPvpRec ? "先行" : (myColor === BLACK ? "执黑" : "执白");
-    $("chipAiTag").textContent = isPvpRec ? "后行" : (myColor === BLACK ? "执白" : "执黑");
-    $("chipHumanIc").className = "stone-ic " + (myColor === BLACK ? "black" : "white");
-    $("chipAiIc").className = "stone-ic " + (myColor === BLACK ? "white" : "black");
+    const whoR = recMode === "pvp" ? (last && last[2] === BLACK ? "黑方" : "白方")
+               : last && last[2] === recMy ? "你" : (recMode === "online" ? "对方" : "AI");
+    elLast.textContent = last ? `${whoR}落子 ${coordName(last[0], last[1])}` : "回到开局";
+    $("chipHuman").classList.toggle("active", !state.over && cur === recMy);
+    $("chipAi").classList.toggle("active", !state.over && cur !== recMy);
+    $("chipHumanName").textContent = recMode === "pvp" ? "黑方" : "你";
+    $("chipAiName").textContent = recMode === "pvp" ? "白方" : (recMode === "online" ? "对方" : "AI");
+    $("chipHumanTag").textContent = recMode === "pvp" ? "先行" : (recMy === BLACK ? "执黑" : "执白");
+    $("chipAiTag").textContent = recMode === "pvp" ? "后行" : (recMy === BLACK ? "执白" : "执黑");
+    $("chipHumanIc").className = "stone-ic " + (recMy === BLACK ? "black" : "white");
+    $("chipAiIc").className = "stone-ic " + (recMy === BLACK ? "white" : "black");
     $("btnNew").disabled = true;
     $("btnUndo").disabled = true;
     $("btnHint").disabled = true;
+    return;
+  }
+  if (state.mode === "online"){
+    const o = state.online, myColor = o ? o.myColor : BLACK, oppColor = opp(myColor);
+    elStatus.classList.remove("thinking");
+    if (!o){ elStatus.textContent = "输入房间号并加入，开始在线对战"; }
+    else if (!o.connected){ elStatus.textContent = "连接中断，正在重连…"; elStatus.classList.add("thinking"); }
+    else if (!o.oppJoined){ elStatus.textContent = "等待对手加入…"; elStatus.classList.add("thinking"); }
+    else if (state.over){ elStatus.textContent = g.draw ? "🤝 平局" : (g.winner === myColor ? "🎉 恭喜，你赢了！" : "对方获胜，再试试？"); }
+    else { elStatus.textContent = cur === myColor ? "轮到你落子" : "等待对方落子…"; elStatus.classList.toggle("thinking", cur !== myColor); }
+    const last = g.moves[g.moves.length - 1];
+    elLast.textContent = !o ? "" : !o.oppJoined
+      ? "把房间号告诉朋友，加入同一房间即可开始"
+      : (last ? `${last.c === myColor ? "你" : "对方"}落子 ${coordName(last.x, last.y)}` : (myColor === BLACK ? "你执黑先行" : "对方执黑先行"));
+    $("chipHuman").classList.toggle("active", !!(o && o.oppJoined) && !state.over && cur === myColor);
+    $("chipAi").classList.toggle("active", !!(o && o.oppJoined) && !state.over && cur !== myColor);
+    $("chipHumanName").textContent = "你";
+    $("chipAiName").textContent = "对方";
+    $("chipHumanTag").textContent = myColor === BLACK ? "执黑" : "执白";
+    $("chipAiTag").textContent = oppColor === BLACK ? "执黑" : "执白";
+    $("chipHumanIc").className = "stone-ic " + (myColor === BLACK ? "black" : "white");
+    $("chipAiIc").className = "stone-ic " + (oppColor === BLACK ? "black" : "white");
+    $("btnNew").disabled = false;
+    $("btnUndo").disabled = !o || !o.oppJoined || g.moves.length === 0;
+    $("btnHint").disabled = !o || !o.oppJoined || state.over || cur !== myColor;
     return;
   }
   $("btnNew").disabled = false;
@@ -1067,12 +1330,17 @@ cv.addEventListener("mouseleave", () => { state.ghost = null; if (!state.animati
 $("segMode").addEventListener("click", e => {
   const b = e.target.closest("button");
   if (!b || b.dataset.v === state.mode) return;
-  state.mode = b.dataset.v;
+  const v = b.dataset.v;
+  if (state.mode === "online" && v !== "online") netLeave();   // 离开在线房间（内部会重置棋局）
+  state.mode = v;
   [...$("segMode").children].forEach(x => x.classList.toggle("on", x === b));
-  document.body.classList.toggle("pvp", state.mode === "pvp");
-  $("modeHint").textContent = state.mode === "pvp"
-    ? "同屏轮流落子：黑方先行，先连成五子者胜。"
-    : "与 AI 对弈，你可选执黑或执白。";
+  document.body.classList.remove("mode-ai", "mode-pvp", "mode-online");
+  document.body.classList.add("mode-" + v);
+  $("modeHint").textContent = {
+    ai: "与 AI 对弈，你可选执黑或执白。",
+    pvp: "同屏轮流落子：黑方先行，先连成五子者胜。",
+    online: "输入相同房间号匹配对手；需先运行 node gomoku-server.js。",
+  }[v];
   newGame();
 });
 $("segLevel").addEventListener("click", e => {
@@ -1092,9 +1360,22 @@ $("segColor").addEventListener("click", e => {
   [...$("segColor").children].forEach(x => x.classList.toggle("on", x === b));
   newGame();
 });
-$("btnNew").addEventListener("click", newGame);
-$("btnAgain").addEventListener("click", newGame);
-$("btnUndo").addEventListener("click", undoMove);
+$("btnNew").addEventListener("click", restartGame);
+$("btnAgain").addEventListener("click", restartGame);
+$("btnUndo").addEventListener("click", () => {
+  if (state.mode === "online" && state.online){
+    if (state.game.moves.length === 0) return;
+    netAction({ type: "undoRequest" });
+    return;
+  }
+  undoMove();
+});
+$("undoYes").addEventListener("click", () => { $("undoAsk").classList.remove("show"); netAction({ type: "undoResponse", accept: true }); });
+$("undoNo").addEventListener("click", () => { $("undoAsk").classList.remove("show"); netAction({ type: "undoResponse", accept: false }); });
+$("btnJoinRoom").addEventListener("click", () => { state.online ? netLeave() : netJoin(); });
+$("btnRandRoom").addEventListener("click", () => { $("roomInput").value = String(1000 + Math.floor(Math.random() * 9000)); });
+$("roomInput").addEventListener("keydown", e => { if (e.key === "Enter" && !state.online) netJoin(); });
+window.addEventListener("beforeunload", () => { if (state.online) netLeave(true); });
 $("btnHint").addEventListener("click", showHint);
 window.addEventListener("keydown", e => {
   if (e.key === "h" || e.key === "H"){
@@ -1153,6 +1434,7 @@ $("btnClearRec").addEventListener("click", () => {
 window.__g = {
   game: state.game, state, humanMove, newGame, undoMove,
   startReplay, exitReplay, renderRecords,
+  netJoin, netLeave, restartGame,
   debugPlace: (x, y, c) => { state.game.place(x, y, c); redraw(); updatePanel(); },
 };
 
