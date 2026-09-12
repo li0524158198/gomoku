@@ -179,6 +179,7 @@
         <button data-v="1">入门</button>
         <button data-v="2" class="on">进阶</button>
         <button data-v="3">大师</button>
+        <button data-v="4">宗师</button>
       </div>
       <div class="hint" id="levelHint">攻守平衡：会防活三、冲四，并制造双威胁。</div>
     </div>
@@ -240,7 +241,8 @@ const DIRS = [[1,0],[0,1],[1,1],[1,-1]];
 /* 棋型分值：成五 > 活四 > 冲四 > 活三 > 眠三 > 活二 ... */
 const SC = { FIVE: 10000000, L4: 1000000, R4: 100000, L3: 80000, S3: 10000, L2: 6000, S2: 800, ONE: 60 };
 const WIN_SCORE = 9500000;
-const NODE_CAP = 60000;
+let nodeCap = 60000;   // 节点数保险丝（宗师用时间上限代替）
+let nodeCount = 0, searchDeadline = 0, timedOut = false;
 
 const opp = c => (c === BLACK ? WHITE : BLACK);
 
@@ -404,11 +406,35 @@ function findWinPoints(g, c){
   return pts;
 }
 
-/* α-β 剪枝极小极大搜索（negamax），value 从当前行棋方视角 */
-let nodeCount = 0;
-function negamax(g, depth, alpha, beta, color){
-  if (depth <= 0 || nodeCount > NODE_CAP) return evaluate(g, color);
-  nodeCount++;
+/* 任一方是否存在一步成五点（完成点必与己方棋子相邻，故只扫距离 1 的邻域） */
+function hotFive(g, c){
+  if (g.moves.length === 0) return false;
+  const seen = new Uint8Array(SIZE * SIZE);
+  for (const m of g.moves){
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++){
+      if (!dx && !dy) continue;
+      const x = m.x + dx, y = m.y + dy;
+      if (!g.inB(x, y)) continue;
+      const k = y * SIZE + x;
+      if (g.b[k] !== EMPTY || seen[k]) continue;
+      seen[k] = 1;
+      if (g.makesFive(x, y, c)) return true;
+    }
+  }
+  return false;
+}
+
+/* α-β 剪枝极小极大搜索（negamax），value 从当前行棋方视角
+ * ext：叶子静态延伸次数——残局存在一步成五威胁时继续搜索，避免漏算杀招 */
+function negamax(g, depth, alpha, beta, color, ext){
+  if (nodeCount > nodeCap) return evaluate(g, color);
+  if ((++nodeCount & 255) === 0 && searchDeadline && Date.now() > searchDeadline) timedOut = true;
+  if (timedOut) return evaluate(g, color);
+  if (depth <= 0){
+    if (ext > 0 && (hotFive(g, color) || hotFive(g, opp(color)))){
+      depth = 1; ext--;                     // 杀棋区延伸
+    } else return evaluate(g, color);
+  }
   const cands = genCandidates(g, color, 9);
   if (cands.length === 0) return evaluate(g, color);
   let best = -Infinity;
@@ -416,7 +442,7 @@ function negamax(g, depth, alpha, beta, color){
     g.place(cd.x, cd.y, color);
     let val;
     if (g.winLine(cd.x, cd.y)) val = WIN_SCORE + depth * 1000;
-    else val = -negamax(g, depth - 1, -beta, -alpha, opp(color));
+    else val = -negamax(g, depth - 1, -beta, -alpha, opp(color), ext);
     g.undo();
     if (val > best) best = val;
     if (best > alpha) alpha = best;
@@ -433,7 +459,7 @@ function randomEmpty(g){
 }
 
 /* AI 主入口：精确战术优先（成五 / 挡五），其余交给搜索
- * level: 1 入门(贪心+随机)  2 进阶(2层搜索)  3 大师(4层搜索) */
+ * level: 1 入门(贪心+随机)  2 进阶(2层)  3 大师(4层+延伸)  4 宗师(6层迭代加深+延伸) */
 function chooseAiMove(g, aiColor, level){
   const foe = opp(aiColor);
 
@@ -466,7 +492,41 @@ function chooseAiMove(g, aiColor, level){
     return cands[1 + Math.floor(Math.random() * Math.min(cands.length - 1, 3))];
   }
 
-  const depth = level === 2 ? 2 : 4;                       // 5b. 进阶/大师：α-β 搜索
+  /* 5b. 宗师：迭代加深 2→4→6 层 + 时间上限，深度完成才采纳该层结果 */
+  if (level >= 4){
+    nodeCap = Infinity;
+    nodeCount = 0; timedOut = false;
+    const cands = genCandidates(g, aiColor, 16);
+    const deadline = Date.now() + 2000;
+    let best = cands[0], bestVal = -Infinity;
+    for (const d of [2, 4, 6]){
+      searchDeadline = deadline; timedOut = false;
+      let curBest = null, curVal = -Infinity, alpha = -Infinity;
+      const vals = [];
+      for (const cd of cands){
+        g.place(cd.x, cd.y, aiColor);
+        let val;
+        if (g.winLine(cd.x, cd.y)) val = WIN_SCORE + d * 1000;
+        else val = -negamax(g, d - 1, -Infinity, -alpha, foe, 8);
+        g.undo();
+        vals.push(val);
+        if (val > curVal){ curVal = val; curBest = cd; }
+        if (val > alpha) alpha = val;
+        if (timedOut) break;
+      }
+      if (timedOut) break;                    // 本层超时未完成：沿用上一层结果
+      cands.forEach((c, i) => { c.val = vals[i]; });
+      best = curBest || best; bestVal = curVal;
+      if (Date.now() > deadline) break;
+    }
+    const ties = cands.filter(c => c.val >= bestVal - 1);   // 等价着法随机挑一个，避免每局雷同
+    return ties[Math.floor(Math.random() * ties.length)] || best;
+  }
+
+  /* 5c. 进阶/大师：定深 α-β 搜索 */
+  const depth = level === 2 ? 2 : 4;
+  const ext = level === 3 ? 2 : 0;
+  nodeCap = 60000;
   nodeCount = 0;
   const cands = genCandidates(g, aiColor, 12);
   let best = cands[0], bestVal = -Infinity, alpha = -Infinity;
@@ -474,7 +534,7 @@ function chooseAiMove(g, aiColor, level){
     g.place(cd.x, cd.y, aiColor);
     let val;
     if (g.winLine(cd.x, cd.y)) val = WIN_SCORE + depth * 1000;
-    else val = -negamax(g, depth - 1, -Infinity, -alpha, foe);
+    else val = -negamax(g, depth - 1, -Infinity, -alpha, foe, ext);
     g.undo();
     cd.val = val;
     if (val > bestVal){ bestVal = val; best = cd; }
@@ -861,7 +921,7 @@ function recResultText(r){
 }
 function recMetaText(r){
   const d = new Date(r.ts), p = n => String(n).padStart(2, "0");
-  const mode = r.mode === "pvp" ? "双人" : r.mode === "online" ? "在线" : "人机·" + ["", "入门", "进阶", "大师"][r.level || 2];
+  const mode = r.mode === "pvp" ? "双人" : r.mode === "online" ? "在线" : "人机·" + ["", "入门", "进阶", "大师", "宗师"][r.level || 2];
   return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())} · ${mode} · ${r.moves.length} 手`;
 }
 function renderRecords(){
@@ -1418,7 +1478,8 @@ $("segLevel").addEventListener("click", e => {
   $("levelHint").textContent = [
     "松懈防守：偶尔失误，适合热身。",
     "攻守平衡：会防活三、冲四，并制造双威胁。",
-    "深度计算：4 层 α-β 搜索，善用四三连接与双三攻势。",
+    "深度计算：4 层 α-β 搜索 + 杀棋延伸，善用四三连接与双三攻势。",
+    "宗师：6 层迭代加深 + 杀棋延伸，算杀更深、防反更密，思维时间也更长。",
   ][state.level - 1];
   updatePanel();
 });
