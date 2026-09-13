@@ -23,7 +23,7 @@ fi
 command -v curl >/dev/null 2>&1 || { echo "[错误] 未检测到 curl：sudo apt-get install -y curl"; exit 1; }
 
 # 1) 构建镜像（首跑拉取 node:20-alpine；失败自动换国内镜像源重试）
-echo "[1/3] 构建镜像 gomoku ..."
+echo "[1/3] 构建镜像 gomoku ...（git pull 更新代码后也会重新构建，页面改动即生效）"
 if ! docker build -t gomoku . ; then
   echo "构建失败，尝试国内镜像源（daocloud）拉取基础镜像后重试..."
   docker pull docker.m.daocloud.io/library/node:20-alpine || \

@@ -1,3 +1,4 @@
+# 更新代码后：docker compose up -d --build （不带 --build 会沿用旧镜像）
 services:
   gomoku:
     build: .

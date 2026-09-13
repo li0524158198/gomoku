@@ -24,6 +24,11 @@ const crypto = require("crypto");
 const CFG_FILE = path.join(__dirname, "config.json");
 const CFG_EXAMPLE = path.join(__dirname, "config.example.json");
 try {
+  const st = fs.existsSync(CFG_FILE) ? fs.statSync(CFG_FILE) : null;
+  if (st && st.isDirectory()){   // compose 首次挂载不存在的文件会自动创建同名目录，需移除
+    fs.rmdirSync(CFG_FILE);
+    console.log("检测到 config.json 为目录（挂载自动创建），已移除以便生成配置文件。");
+  }
   if (!fs.existsSync(CFG_FILE) && fs.existsSync(CFG_EXAMPLE)){
     fs.copyFileSync(CFG_EXAMPLE, CFG_FILE);
     console.log("已从 config.example.json 生成 config.json —— 修改该文件即可自定义配置（不会被 git 覆盖）。");

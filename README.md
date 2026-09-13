@@ -44,6 +44,14 @@
 - `docs/` —— **设计与开发文档**（架构总览、AI 算法原理、在线协议、UI 实现、
   持久化机制、逐轮开发纪事、测试体系，共 7 篇），入口：[docs/README.md](docs/README.md)
 
+## 更新部署
+
+代码更新（git pull）后的重启方式（启动脚本会自动停止旧实例再启动，页面改动即生效）：
+
+- 裸机运行：`start-gomoku.bat` / `start-gomoku.sh`
+- Docker：`./docker-deploy.sh` 或 `docker compose up -d --build`（不带 --build 会沿用旧镜像）
+- 页面响应带 no-store 头，正常刷新即加载新版；若仍见旧版请 Ctrl+F5 强制刷新
+
 ## 在线对战服务器
 
 ```bash
