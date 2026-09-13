@@ -1175,8 +1175,8 @@ async function probeServer(){    // 切到在线模式时探测服务器是否�
     setOnlineHint("对战服务器已就绪 · 输入房间号即可加入（可设置选填密码）");
   } catch (e) {
     setOnlineHint("对战服务器未连接，请稍后重试");
-    console.warn("[gomoku] 未检测到对战服务器。启动方式：Windows 双击 start-gomoku.bat，" +
-      "Linux/macOS 运行 ./start-gomoku.sh；Docker 部署用 docker-deploy 或 docker compose up -d。", e);
+    console.warn("[gomoku] 未检测到对战服务器。启动方式：Windows 双击 gomoku.bat，" +
+      "Linux/macOS 运行 ./gomoku.sh，或使用 Docker。", e);
   }
 }
 function refreshOnlineHint(){
@@ -1223,8 +1223,8 @@ async function netJoin(){
     connectEvents();
   } catch (e) {
     setOnlineHint("无法连接对战服务器，请稍后重试");
-    console.warn("[gomoku] 加入房间失败（网络原因）。启动方式：Windows 双击 start-gomoku.bat，" +
-      "Linux/macOS 运行 ./start-gomoku.sh；Docker 部署用 docker-deploy 或 docker compose up -d。", e);
+    console.warn("[gomoku] 加入房间失败（网络原因）。启动方式：Windows 双击 gomoku.bat，" +
+      "Linux/macOS 运行 ./gomoku.sh，或使用 Docker。", e);
   }
 }
 function netLeave(silent){

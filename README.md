@@ -32,9 +32,7 @@
 ## 文件
 
 - `index.html` —— 游戏本体（HTML/CSS/JS 全部内嵌，双击即可离线玩单机模式）
-- `docker-deploy.bat` / `docker-deploy.sh` —— **Docker 一键部署**（构建 + 启动 + 健康检查 + 开浏览器）
-- `stop-gomoku.bat` / `stop-gomoku.sh` —— 一键停止（Docker 容器与端口进程一并清理）
-- `start-gomoku.bat` / `start-gomoku.sh` —— 免 Docker 一键启动器（裸 Node 运行）
+- `gomoku.bat` / `gomoku.sh` —— **统一管理脚本**（自动识别 Docker/裸机；start / stop / restart / status）
 - `Dockerfile` / `docker-compose.yml` —— Docker 镜像与编排
 - `config.example.json` / `config.json` —— 服务器配置模板与本机配置（端口、观战上限、密码长度等；
   本机配置已被 .gitignore 忽略，git pull 不会覆盖）
@@ -46,10 +44,10 @@
 
 ## 更新部署
 
-代码更新（git pull）后的重启方式（启动脚本会自动停止旧实例再启动，页面改动即生效）：
+代码更新（git pull）后：
 
-- 裸机运行：`start-gomoku.bat` / `start-gomoku.sh`
-- Docker：`./docker-deploy.sh` 或 `docker compose up -d --build`（不带 --build 会沿用旧镜像）
+- `./gomoku.sh restart`（或 `gomoku.bat restart`）—— 自动清理旧容器/旧进程并启动新版本
+- 也可 `docker compose up -d --build`（注意不带 --build 会沿用旧镜像）
 - 页面响应带 no-store 头，正常刷新即加载新版；若仍见旧版请 Ctrl+F5 强制刷新
 
 ## 在线对战服务器
