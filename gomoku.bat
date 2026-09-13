@@ -28,7 +28,8 @@ if /i "%CMD%"=="start"   goto start
 if /i "%CMD%"=="stop"    goto stop
 if /i "%CMD%"=="restart" goto stop
 if /i "%CMD%"=="status"  goto status
-echo Usage: gomoku.bat [start^|stop^|restart^|status] [port]
+if /i "%CMD%"=="doctor"  goto status
+echo Usage: gomoku.bat [start^|stop^|restart^|status^|doctor] [port]
 goto end
 
 :stop

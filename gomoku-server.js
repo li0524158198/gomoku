@@ -398,9 +398,14 @@ function bind(){
   }
   const p = PORTS[portIdx++];
   server.listen(p, HOST, () => {
+    const loopback = HOST === "127.0.0.1" || HOST === "localhost" || HOST === "::1";
     console.log("五子棋在线对战服务器已启动。");
+    console.log(`监听: ${HOST}:${p}${loopback ? "  ⚠ 仅本机可访问（外部访问请将 config.json 的 host 改为 0.0.0.0 并重启）" : "（所有网卡）"}`);
     console.log("  本机访问:  http://127.0.0.1:" + p + "/");
-    console.log("  局域网/云: " + lanAddresses(p));
+    if (!loopback){
+      console.log("  局域网/云: " + lanAddresses(p));
+      console.log(`  云服务器提醒: 请确认控制台安全组/防火墙已放行 TCP ${p}（浏览器用 http:// 而非 https:// 访问）`);
+    }
     console.log("玩家打开地址 → 选择「在线对战」→ 输入相同房间号即可匹配。");
     console.log(`配置文件: ${CFG_FILE}（观战上限 ${SPEC_MAX} · 房间回收 ${Math.round(ROOM_TTL / 3600000)}h · 重连宽限 ${RECONNECT_GRACE}ms）`);
     console.log(`(端口配置 ${PORT_ARG}，实际使用 ${p}；配置文件或环境变量 GOMOKU_NO_OPEN 可禁止自动开浏览器)`);

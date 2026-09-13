@@ -9,6 +9,9 @@
 #  兼容: 取代原 start-gomoku / docker-deploy / stop-gomoku
 # ============================================================
 cd "$(dirname "$0")"
+
+# 兼容 sh/dash 调用：本脚本使用了部分 bash 特性，检测到非 bash 时自动切换
+if [ -z "${BASH_VERSION:-}" ] && command -v bash >/dev/null 2>&1; then exec bash "$0" "$@"; fi
 CMD="${1:-start}"
 PORT_ARG="${2:-}"
 
@@ -19,6 +22,60 @@ if [ -f config.json ]; then
 fi
 PORT="${PORT:-3000}"
 [ -n "$PORT_ARG" ] && PORT="$PORT_ARG"
+
+
+# —— 诊断：端口在但外部访问不了时的自动检查 ——
+do_doctor() {
+  echo "== 五子棋诊断（端口 ${PORT}）=="
+  local code="" i="" cfghost="0.0.0.0" spec_max=""
+  if [ -f config.json ]; then
+    cfghost=$(grep -E '^  "host"[[:space:]]*:' config.json | head -n1 | sed "s/.*:[[:space:]]*\"//; s/\".*//")
+    spec_max=$(grep -E '"specMax"[[:space:]]*:' config.json | head -n1 | grep -oE '[0-9]+' | head -n1)
+  fi
+  [ -z "$cfghost" ] && cfghost="0.0.0.0"
+  local loopback_only=0
+  case "$cfghost" in 127.0.0.1|localhost|::1) loopback_only=1 ;; esac
+  for i in 1 2 3; do
+    code=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${PORT}/" 2>/dev/null || echo 000)
+    [ "$code" = "200" ] && break
+    sleep 1
+  done
+  echo "1) 配置: host=${cfghost} · 端口=${PORT} · 观战上限=${spec_max:-5000（默认）}"
+  echo "2) 本机自检: HTTP ${code} $([ "$code" = "200" ] && echo "✓ 服务正常" || echo "✗ 服务未启动，请先 ./gomoku.sh start")"
+  local bindline=""
+  if command -v ss >/dev/null 2>&1; then
+    bindline=$(ss -ltn 2>/dev/null | grep ":${PORT} " | head -n 1)
+  elif command -v netstat >/dev/null 2>&1; then
+    bindline=$(netstat -an 2>/dev/null | grep LISTEN | grep "[:.]${PORT} " | head -n 1)
+  fi
+  echo "3) 监听地址: ${bindline:-（未检测到 ss/netstat，跳过）}"
+  if [ "$USE_DOCKER" = 1 ]; then
+    echo "4) Docker 容器:"
+    docker ps -a --filter name=gomoku --format "   {{.Names}} | {{.Status}} | {{.Ports}}" 2>/dev/null
+  fi
+  echo "5) 防火墙:"
+  if command -v ufw >/dev/null 2>&1; then
+    ufw status 2>/dev/null | head -n 5 | sed "s/^/   /"
+  else
+    echo "   （未检测到 ufw；云服务器请到控制台检查安全组是否放行 TCP ${PORT}）"
+  fi
+  echo "6) 结论:"
+  if [ "$loopback_only" = 1 ]; then
+    echo "   ⚠ 配置的 host 是 ${cfghost}：服务只对本机开放，外部无法访问！"
+    echo "   → 把 config.json 的 host 改为 0.0.0.0，然后 ./gomoku.sh restart"
+  elif [ "$code" != "200" ]; then
+    if [ "$USE_DOCKER" = 1 ] && docker ps --filter name=gomoku --format "{{.Names}}" 2>/dev/null | grep -q gomoku; then
+      echo "   容器刚启动可能尚未就绪，可稍候重试 ./gomoku.sh doctor"
+    else
+      echo "   服务未启动 → ./gomoku.sh start"
+    fi
+  else
+    echo "   服务与配置正常。外部仍打不开时依次检查："
+    echo "   a) 云控制台安全组放行 TCP ${PORT}（最常见原因）"
+    echo "   b) 系统防火墙: sudo ufw allow ${PORT}/tcp"
+    echo "   c) 浏览器地址用 http://公网IP:${PORT}/（不要用 https）"
+  fi
+}
 
 # —— 运行方式识别：Docker 可用即容器化，否则裸机 Node ——
 USE_DOCKER=0
@@ -118,5 +175,6 @@ case "$CMD" in
   stop)    do_stop ;;
   restart) do_stop; sleep 1; if [ "$USE_DOCKER" = 1 ]; then do_start_docker; else do_start_node; fi ;;
   status)  do_status ;;
-  *) echo "用法: ./gomoku.sh [start|stop|restart|status] [端口]"; exit 1 ;;
+  doctor)  do_doctor ;;
+  *) echo "用法: ./gomoku.sh [start|stop|restart|status|doctor] [端口]"; exit 1 ;;
 esac
