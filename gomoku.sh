@@ -15,6 +15,8 @@ if [ -z "${BASH_VERSION:-}" ] && command -v bash >/dev/null 2>&1; then exec bash
 CMD="${1:-start}"
 PORT_ARG="${2:-}"
 
+export MSYS_NO_PATHCONV=1   # Git Bash 调用时禁用路径转换（防止 -v 挂载参数被破坏；Linux 无影响）
+
 # —— 端口：显式参数 > config.json > 3000 ——
 PORT=""
 if [ -f config.json ]; then
@@ -144,6 +146,9 @@ do_start_docker() {
   command -v xdg-open >/dev/null 2>&1 && xdg-open "http://127.0.0.1:${PORT}/" >/dev/null 2>&1 || true
   command -v open >/dev/null 2>&1 && open "http://127.0.0.1:${PORT}/" >/dev/null 2>&1 || true
   echo "访问: http://127.0.0.1:${PORT}/   日志: docker logs -f gomoku"
+  local lan
+  lan=$(hostname -I 2>/dev/null | awk "{print }")
+  [ -n "$lan" ] && echo "      局域网/公网: http://${lan}:${PORT}/  （云服务器请确认安全组已放行 TCP ${PORT}）"
 }
 
 # —— 裸机 Node 模式启动（后台 + 日志）——

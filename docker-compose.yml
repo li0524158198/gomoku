@@ -4,10 +4,10 @@ services:
     build: .
     container_name: gomoku-server
     ports:
+      # 容器内监听端口 = config.json 的 port；改了端口需同步改映射（如 29995:29995）
       - "3000:3000"          # 云服务器开放安全组后，访问 http://<公网IP>:3000
     environment:
       - GOMOKU_NO_OPEN=1     # 容器内无浏览器，禁用自动打开
-      - PORT=3000            # 可改端口或范围：PORT_RANGE=3000-3010
     volumes:
       - ./config.json:/app/config.json   # 挂载本机配置（可改端口/观战上限等，持久化）
     restart: unless-stopped
