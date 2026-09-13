@@ -478,6 +478,14 @@ function randomEmpty(g){
 /* AI 主入口：精确战术优先（成五 / 挡五），其余交给搜索
  * level: 1 入门  2 进阶  3 大师  4 宗师  5 棋圣  6 棋仙  7 棋神
  *        4 以上为迭代加深 + 时间上限 + 杀棋延伸，详见 5b 分支配置表 */
+/* 开局书：以「前 ≤10 手落子序列」为局面键，记录/复用与该对手交手过的 AI 应手 */
+function bookKey(g, upTo){
+  const n = Math.min(upTo === undefined ? g.moves.length : upTo, 10);
+  const parts = [];
+  for (let i = 0; i < n; i++) parts.push(g.moves[i].x + ":" + g.moves[i].y + ":" + g.moves[i].c);
+  return parts.join(",");
+}
+
 function chooseAiMove(g, aiColor, level, oModel){
   const foe = opp(aiColor);
 
@@ -495,6 +503,15 @@ function chooseAiMove(g, aiColor, level, oModel){
   }
 
   // 空盘不再早退：交由开局记忆与候选机制决定首手（无画像时 genCandidates 自然返回天元）
+  /* 开局书：该局面曾与同一对手下过且非败局 → 直接复用当时的应手（0 搜索，学习加速） */
+  if (oModel && oModel.book && g.moves.length < 10){
+    const e = oModel.book[bookKey(g)];
+    if (e && e.uses < 3 && g.at(e.x, e.y) === EMPTY){
+      oModel.book[bookKey(g)].uses = e.uses + 1;
+      return { x: e.x, y: e.y };
+    }
+  }
+
   if (g.moves.length === 1){                               // 4. 第二手贴身应对
     const m = g.moves[0];
     for (const [dx, dy] of [[1,0],[0,1],[-1,0],[0,-1],[1,1],[-1,-1],[1,-1],[-1,1]]){
@@ -533,7 +550,8 @@ function chooseAiMove(g, aiColor, level, oModel){
     nodeCap = Infinity;
     nodeCount = 0; timedOut = false;
     const cands = genCandidates(g, aiColor, cfg.k);
-    const deadline = Date.now() + cfg.t;
+    const tMul = (oModel && oModel.games) ? Math.max(0.35, 1 - 0.1 * Math.min(oModel.games, 7)) : 1;
+    const deadline = Date.now() + Math.round(cfg.t * tMul);   // 学习加速：越熟悉思考越快
     let best = cands[0], bestVal = -Infinity;
     for (const d of cfg.depths){
       searchDeadline = deadline; timedOut = false;
@@ -554,6 +572,7 @@ function chooseAiMove(g, aiColor, level, oModel){
       cands.forEach((c, i) => { c.val = vals[i]; });
       cands.sort((a, b) => b.val - a.val);    // 最优着法排最前，加速下一层剪枝
       best = cands[0]; bestVal = best.val;
+      if (bestVal >= WIN_SCORE) break;   // 已证明必胜：无需更深搜索（学习加速）
       if (Date.now() > deadline) break;
     }
     /* 首手开局记忆：空盘时搜索值相近，按历史胜负加成（胜+负-），主导开局选择 */
@@ -890,22 +909,55 @@ function finishCheck(){
   return false;
 }
 
+/* ---------- AI 计算线程（Web Worker）：思考不阻塞页面，可随时悔棋打断 ---------- */
+const ENGINE_SRC = (() => {
+  const el = document.currentScript || document.querySelector("script");
+  const txt = el ? el.textContent : "";
+  const a = txt.indexOf("/*__ENGINE_START__*/"), b = txt.indexOf("/*__ENGINE_END__*/");
+  return (a >= 0 && b > a) ? txt.slice(a, b) : "";
+})();
+let aiWorker = null;
+function getAiWorker(){
+  if (aiWorker) return aiWorker;
+  try {
+    if (!ENGINE_SRC) return null;
+    const code = ENGINE_SRC + "\r\nself.onmessage = (e) => {\r\n  const d = e.data;\r\n  const g = new Game();\r\n  for (const m of d.moves) g.place(m[0], m[1], m[2]);\r\n  const mv = chooseAiMove(g, d.aiColor, d.level, d.oModel || null);\r\n  postMessage({ x: mv.x, y: mv.y });\r\n};";
+    aiWorker = new Worker(URL.createObjectURL(new Blob([code], { type: "application/javascript" })));
+  } catch (e) { aiWorker = null; }
+  return aiWorker;
+}
+function killAiWorker(){ if (aiWorker){ aiWorker.terminate(); aiWorker = null; } }
+
 function scheduleAi(){
   state.thinking = true;
   updatePanel();
   const tk = ++state.token;
-  setTimeout(() => {
-    if (tk !== state.token || state.over) return;
-    const g = state.game;
-    if (currentColor() === state.humanColor){ state.thinking = false; updatePanel(); return; }
+  const aiColor = opp(state.humanColor);
+  const moves = state.game.moves.map(m => [m.x, m.y, m.c]);
+  const oModel = currentOpponentProfile();
+  state.hint = null;
+  const w = getAiWorker();
+  if (w){
     const t0 = performance.now();
-    state.hint = null;
-    const mv = chooseAiMove(g, opp(state.humanColor), state.level, currentOpponentProfile());
-    state.lastAiMs = Math.round(performance.now() - t0);
-    state.thinking = false;
-    doPlace(mv.x, mv.y, opp(state.humanColor));
-    finishCheck();
-  }, 160);
+    w.onmessage = (e) => {
+      state.thinking = false;
+      if (tk !== state.token || state.over) return;   // 已悔棋/重开：作废本次计算
+      state.lastAiMs = Math.round(performance.now() - t0);
+      doPlace(e.data.x, e.data.y, aiColor);
+      finishCheck();
+    };
+    w.postMessage({ moves, aiColor, level: state.level, oModel });
+  } else {
+    setTimeout(() => {                                // 降级：无 Worker 时同步计算
+      if (tk !== state.token || state.over) return;
+      const t0 = performance.now();
+      const mv = chooseAiMove(state.game, aiColor, state.level, currentOpponentProfile());
+      state.lastAiMs = Math.round(performance.now() - t0);
+      state.thinking = false;
+      doPlace(mv.x, mv.y, aiColor);
+      finishCheck();
+    }, 160);
+  }
 }
 
 function newGame(){
@@ -925,15 +977,25 @@ function newGame(){
 
 function undoMove(){
   const g = state.game;
-  if (state.replay || state.thinking) return;
-  if (state.mode === "pvp"){
-    if (g.moves.length === 0) return;
-  } else if (!g.moves.some(m => m.c === state.humanColor)) return;
+  if (state.replay || state.mode === "online") return;
+  if (state.mode === "pvp"){ if (g.moves.length === 0) return; }
+  else if (!g.moves.some(m => m.c === state.humanColor)) return;
+  if (state.thinking){                             // AI 正在思考：作废其计算，只撤玩家误落的一手
+    state.token++;
+    killAiWorker();
+    state.thinking = false;
+    g.undo();
+  } else if (state.mode === "pvp"){
+    g.undo();
+  } else {
+    if (g.moves.length && g.moves[g.moves.length - 1].c !== state.humanColor) g.undo();
+    if (g.moves.length && g.moves[g.moves.length - 1].c === state.humanColor) g.undo();
+  }
   state.over = false;
   state.recSaved = false;
   state.hint = null;
   g.winner = 0; g.winCells = null; g.draw = false;
-  elOverlay.classList.remove("show");
+  elOverlay.classList.remove("show");elOverlay.classList.remove("show");
   if (state.mode === "pvp"){
     g.undo();
   } else {
@@ -1753,6 +1815,7 @@ $("segMode").addEventListener("click", e => {
     if (v === "online" && !state.online) probeServer();   // 重复点击：重新探测服务器
     return;
   }
+  killAiWorker();
   if (state.mode === "online" && v !== "online") netLeave();   // 离开在线房间（内部会重置棋局）
   state.mode = v;
   [...$("segMode").children].forEach(x => x.classList.toggle("on", x === b));
