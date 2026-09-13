@@ -166,6 +166,7 @@
       </div>
       <div id="status"></div>
       <div id="lastInfo"></div>
+      <div id="learnInfo" style="display:none"></div>
     </div>
 
     <div class="card">
@@ -380,7 +381,11 @@ function evaluate(g, color){
 }
 
 /* 候选点：已有棋子切比雪夫距离 ≤2 的空点，按 攻分 + 0.9×防分 排序取前 K */
-function genCandidates(g, color, K){
+function heatPrior(oModel, x, y){   // 对手落子热度先验：抢占其惯用点（权重小，仅作近局微调）
+  if (!opp || !opp.heat || !opp.games) return 0;
+  return Math.min(300, (oModel.heat[y * SIZE + x] || 0) * 40 / Math.max(1, oModel.games));
+}
+function genCandidates(g, color, K, oModel){
   if (g.moves.length === 0) return [{ x: 7, y: 7 }];
   const seen = new Set(), list = [];
   const foe = opp(color);
@@ -473,7 +478,7 @@ function randomEmpty(g){
 /* AI 主入口：精确战术优先（成五 / 挡五），其余交给搜索
  * level: 1 入门  2 进阶  3 大师  4 宗师  5 棋圣  6 棋仙  7 棋神
  *        4 以上为迭代加深 + 时间上限 + 杀棋延伸，详见 5b 分支配置表 */
-function chooseAiMove(g, aiColor, level){
+function chooseAiMove(g, aiColor, level, oModel){
   const foe = opp(aiColor);
 
   const myFive = findWinPoints(g, aiColor);
@@ -489,7 +494,7 @@ function chooseAiMove(g, aiColor, level){
     return best;
   }
 
-  if (g.moves.length === 0) return { x: 7, y: 7 };         // 3. 空盘落天元
+  // 空盘不再早退：交由开局记忆与候选机制决定首手（无画像时 genCandidates 自然返回天元）
   if (g.moves.length === 1){                               // 4. 第二手贴身应对
     const m = g.moves[0];
     for (const [dx, dy] of [[1,0],[0,1],[-1,0],[0,-1],[1,1],[-1,-1],[1,-1],[-1,1]]){
@@ -507,6 +512,17 @@ function chooseAiMove(g, aiColor, level){
 
   /* 5b. 宗师及以上：迭代加深 + 时间上限，深度完成才采纳该层结果
    *      k=根候选数  t=思考时间上限  ext=杀棋延伸层数  depths=迭代加深序列 */
+  /* 空盘首手且已有开局记忆：候选 = 天元 + 星位备选 + 曾用开局，由胜负记忆决定避开/保持 */
+  var openingRoots = null;
+  if (g.moves.length === 0 && oModel && oModel.games >= 2 && Object.keys(oModel.aiOpenings || {}).length){
+    const cells = new Map([["7,7", {x:7,y:7}]]);
+    for (const [ax, ay] of [[3,3],[11,3],[3,11],[11,11],[7,3],[3,7],[11,7],[7,11]]) cells.set(ax + "," + ay, {x:ax, y:ay});
+    for (const k of Object.keys(oModel.aiOpenings)){
+      const p = k.split(",");
+      if (g.inB(+p[0], +p[1])) cells.set(k, {x:+p[0], y:+p[1]});
+    }
+    openingRoots = [...cells.values()];
+  }
   if (level >= 4){
     const cfg = [
       { k: 16, t: 2000,  ext: 8,  depths: [2, 4, 6] },          // 宗师
@@ -540,6 +556,18 @@ function chooseAiMove(g, aiColor, level){
       best = cands[0]; bestVal = best.val;
       if (Date.now() > deadline) break;
     }
+    /* 首手开局记忆：空盘时搜索值相近，按历史胜负加成（胜+负-），主导开局选择 */
+    if (g.moves.length === 0 && oModel && oModel.aiOpenings){
+      for (const cd of cands){
+        const rec = oModel.aiOpenings[cd.x + "," + cd.y];
+        if (rec){
+          const n = Math.max(1, rec.w + rec.l + rec.d);
+          cd.val = (cd.val || 0) + Math.round(200000 * (rec.w - rec.l) / n);
+        }
+      }
+      cands.sort((a, b) => b.val - a.val);
+      best = cands[0]; bestVal = best.val;
+    }
     const ties = cands.filter(c => c.val >= bestVal - 1);   // 等价着法随机挑一个，避免每局雷同
     return ties[Math.floor(Math.random() * ties.length)] || best;
   }
@@ -549,7 +577,7 @@ function chooseAiMove(g, aiColor, level){
   const ext = level === 3 ? 2 : 0;
   nodeCap = 60000;
   nodeCount = 0;
-  const cands = genCandidates(g, aiColor, 12);
+  const cands = (openingRoots && openingRoots.length) ? openingRoots : genCandidates(g, aiColor, 12);
   let best = cands[0], bestVal = -Infinity, alpha = -Infinity;
   for (const cd of cands){
     g.place(cd.x, cd.y, aiColor);
@@ -560,6 +588,18 @@ function chooseAiMove(g, aiColor, level){
     cd.val = val;
     if (val > bestVal){ bestVal = val; best = cd; }
     if (val > alpha) alpha = val;
+  }
+  /* 首手开局记忆：空盘时搜索值相近，按历史胜负加成（胜+负-），主导开局选择 */
+  if (g.moves.length === 0 && oModel && oModel.aiOpenings){
+    for (const cd of cands){
+      const rec = oModel.aiOpenings[cd.x + "," + cd.y];
+      if (rec){
+        const n = Math.max(1, rec.w + rec.l + rec.d);
+        cd.val = (cd.val || 0) + Math.round(200000 * (rec.w - rec.l) / n);
+      }
+    }
+    cands.sort((a, b) => b.val - a.val);
+    best = cands[0]; bestVal = best.val;
   }
   const ties = cands.filter(c => c.val >= bestVal - 1);    // 等价着法随机挑一个，避免每局雷同
   return ties[Math.floor(Math.random() * ties.length)] || best;
@@ -830,6 +870,7 @@ function finishCheck(){
     elOverlay.classList.add("show");
     sfx(pvp || humanWon ? "win" : "lose");
     saveLive();
+    updateLearnInfo();
     return true;
   }
   if (g.moves.length >= SIZE * SIZE){
@@ -859,7 +900,7 @@ function scheduleAi(){
     if (currentColor() === state.humanColor){ state.thinking = false; updatePanel(); return; }
     const t0 = performance.now();
     state.hint = null;
-    const mv = chooseAiMove(g, opp(state.humanColor), state.level);
+    const mv = chooseAiMove(g, opp(state.humanColor), state.level, currentOpponentProfile());
     state.lastAiMs = Math.round(performance.now() - t0);
     state.thinking = false;
     doPlace(mv.x, mv.y, opp(state.humanColor));
@@ -917,7 +958,7 @@ function showHint(){
     if (state.mode === "ai" && currentColor() !== state.humanColor) return;
     if (state.mode === "online" && (!state.online || state.online.role !== "player" ||
         !state.online.oppJoined || currentColor() !== state.online.myColor)) return;
-    const mv = chooseAiMove(g, currentColor(), 3);        // 大师级计算
+    const mv = chooseAiMove(g, currentColor(), 3, currentOpponentProfile());   // 大师级计算
     if (!mv || g.at(mv.x, mv.y) !== EMPTY) return;
     state.hint = mv;
     sfx("place");
@@ -970,6 +1011,7 @@ function renderRecords(){
   });
 }
 function saveRecord(){
+  learnGameEnd();
   if (state.recSaved) return;
   const g = state.game;
   let result;
@@ -1170,11 +1212,13 @@ async function netJoin(){
       connected: false, oppJoined: false, es: null,
       seats: (data.state && data.state.seats) || null,
       specCount: data.specCount || 0,
+      allPids: (data.state && data.state.pids) || null,
       pwd,
     };
     saveLive();
     input.disabled = true;
     $("pwdInput").disabled = true;
+    if (state.online.allPids) state.online.oppPid = state.online.allPids[opp(state.online.myColor)] || null;
     $("btnJoinRoom").textContent = "退出房间";
     connectEvents();
   } catch (e) {
@@ -1301,6 +1345,7 @@ function handleNetMsg(msg){
   if (!o) return;
   const st = msg.state || {};
   o.seats = st.seats || o.seats || { [BLACK]: false, [WHITE]: false };
+  if (st.pids) o.allPids = st.pids;
   if (typeof st.specCount === "number") o.specCount = st.specCount;
   const oppColor = opp(o.myColor);
   o.oppJoined = o.role === "spectator"
@@ -1387,6 +1432,73 @@ async function netTakeSeat(){
     try { if (o.es) o.es.close(); } catch (e) {}
     connectEvents();                                    // 以玩家身份重新订阅
   } catch (e) { setOnlineHint("网络错误，请稍后再试"); }
+}
+
+/* ---------- 对手画像（与同一对手多次对弈后自动学习其棋路） ---------- */
+const OPP_KEY = "gomoku_opponents_v1";
+state.opponents = (() => { try { return JSON.parse(localStorage.getItem(OPP_KEY) || "{}"); } catch (e) { return {}; } })();
+function persistOpponents(){ try { localStorage.setItem(OPP_KEY, JSON.stringify(state.opponents)); } catch (e) {} }
+function oppProfile(key){
+  if (!key) return null;
+  if (!state.opponents[key]) state.opponents[key] = {
+    games: 0, wins: 0, losses: 0, draws: 0,
+    heat: new Array(SIZE * SIZE).fill(0),   // 对手落子热点（225 格计数）
+    firstMoves: {},                          // 对手首手频次 "x,y" -> n
+    aiOpenings: {},                          // AI 执黑首手战绩 "x,y" -> {w,l,d}
+  };
+  return state.opponents[key];
+}
+function currentOpponentKey(){
+  if (state.mode === "ai") return "local";
+  if (state.mode === "online" && state.online && state.online.role === "player" && state.online.oppPid)
+    return "on:" + state.online.oppPid;
+  return null;   // 双人模式（同屏两人）与观战不学习
+}
+function currentOpponentProfile(){
+  const key = currentOpponentKey();
+  return key ? (state.opponents[key] || null) : null;
+}
+function learnGameEnd(){         // 终局时更新对手画像（与 saveRecord 同触发点，去重逻辑一致）
+  const key = currentOpponentKey();
+  if (!key) return;
+  const g = state.game;
+  if (!g.moves.length) return;
+  const aiColor = state.mode === "ai" ? opp(state.humanColor) : state.online.myColor;
+  const prof = oppProfile(key);
+  prof.games++;
+  if (g.draw) prof.draws++;
+  else if (g.winner === aiColor) prof.wins++;
+  else prof.losses++;
+  let oppFirst = null;
+  for (const m of g.moves){
+    if (m.c !== aiColor){
+      prof.heat[m.y * SIZE + m.x] = (prof.heat[m.y * SIZE + m.x] || 0) + 1;
+      if (!oppFirst) oppFirst = m;
+    }
+  }
+  if (oppFirst){
+    const k = oppFirst.x + "," + oppFirst.y;
+    prof.firstMoves[k] = (prof.firstMoves[k] || 0) + 1;
+  }
+  if (g.moves.length && g.moves[0].c === aiColor){
+    const f = g.moves[0];
+    const k = f.x + "," + f.y;
+    prof.aiOpenings[k] = prof.aiOpenings[k] || { w: 0, l: 0, d: 0 };
+    if (g.draw) prof.aiOpenings[k].d++;
+    else if (g.winner === aiColor) prof.aiOpenings[k].w++;
+    else prof.aiOpenings[k].l++;
+  }
+  persistOpponents();
+}
+function updateLearnInfo(){      // 状态卡中的学习指示
+  const el = $("learnInfo");
+  if (!el) return;
+  const prof = currentOpponentProfile();
+  if (!prof || !prof.games){ el.style.display = "none"; return; }
+  el.style.display = "";
+  el.textContent = state.mode === "ai"
+    ? `🧠 已学习你的棋路 ${prof.games} 局（你胜 ${prof.losses} · AI胜 ${prof.wins} · 平 ${prof.draws}），后续将针对性应对`
+    : `🧠 对手画像：已记录 ${prof.games} 局（你胜 ${prof.wins} · 对方胜 ${prof.losses} · 平 ${prof.draws}）`;
 }
 
 /* ---------- 退出后自动续上 ---------- */
@@ -1515,6 +1627,7 @@ function updatePanel(){
   for (const id of ["btnNew", "btnUndo", "btnHint", "btnMute"]){   // 被禁用时退出确认态
     const b = $(id);
     if (b && b.disabled && b.dataset.arm === "1") disarm(b);
+    updateLearnInfo();
   }
   if (state.replay){
     const rp = state.replay, n = rp.rec.moves.length;
@@ -1762,7 +1875,7 @@ $("btnClearRec").addEventListener("click", () => {
 window.__g = {
   game: state.game, state, humanMove, newGame, undoMove,
   startReplay, exitReplay, renderRecords,
-  netJoin, netLeave, restartGame, saveLive,
+  netJoin, netLeave, restartGame, saveLive, learnGameEnd, currentOpponentProfile,
   debugPlace: (x, y, c) => { state.game.place(x, y, c); redraw(); updatePanel(); },
 };
 

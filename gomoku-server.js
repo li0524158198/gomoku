@@ -104,6 +104,8 @@ function stateOf(r){
     winCells: g.winCells || null,
     turn,
     seats: { [BLACK]: hasSeat(r, BLACK), [WHITE]: hasSeat(r, WHITE) },
+    pids: { [BLACK]: (r.players[BLACK] && r.players[BLACK].pid) || null,
+            [WHITE]: (r.players[WHITE] && r.players[WHITE].pid) || null },
     specCount: r.spectators.size,
   };
 }
