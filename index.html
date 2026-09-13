@@ -980,7 +980,7 @@ function undoMove(){
   if (state.replay || state.mode === "online") return;
   if (state.mode === "pvp"){ if (g.moves.length === 0) return; }
   else if (!g.moves.some(m => m.c === state.humanColor)) return;
-  if (state.thinking){                             // AI 正在思考：作废其计算，只撤玩家误落的一手
+  if (state.thinking){                             // AI 思考中：作废其计算，只撤玩家误落的一手
     state.token++;
     killAiWorker();
     state.thinking = false;
@@ -995,13 +995,7 @@ function undoMove(){
   state.recSaved = false;
   state.hint = null;
   g.winner = 0; g.winCells = null; g.draw = false;
-  elOverlay.classList.remove("show");elOverlay.classList.remove("show");
-  if (state.mode === "pvp"){
-    g.undo();
-  } else {
-    if (g.moves.length && g.moves[g.moves.length - 1].c !== state.humanColor) g.undo();
-    if (g.moves.length && g.moves[g.moves.length - 1].c === state.humanColor) g.undo();
-  }
+  elOverlay.classList.remove("show");
   updatePanel(); redraw();
   saveLive();
 }
@@ -1780,8 +1774,8 @@ function updatePanel(){
   $("chipAiTag").textContent = pvp ? "后行" : (state.humanColor === BLACK ? "执白" : "执黑");
   $("chipHumanIc").className = "stone-ic " + (pvp || state.humanColor === BLACK ? "black" : "white");
   $("chipAiIc").className = "stone-ic " + (pvp || state.humanColor === BLACK ? "white" : "black");
-  $("btnUndo").disabled = state.thinking ||
-    (pvp ? g.moves.length === 0 : !g.moves.some(m => m.c === state.humanColor));
+  $("btnUndo").disabled =
+    (pvp ? g.moves.length === 0 : !g.moves.some(m => m.c === state.humanColor));   // 思考中也可立即悔棋
 }
 
 /* ---------- 事件绑定 ---------- */
@@ -1847,10 +1841,13 @@ function disarm(btn){
 }
 function armConfirm(btn, confirmText, action){
   if (btn.disabled) return;
+  if (btn.dataset.coolUntil && Date.now() < +btn.dataset.coolUntil) return;   // 冷却期：防双击/连点重复执行
+
   if (armedBtn && armedBtn !== btn) disarm(armedBtn);          // 同时只保留一个确认态
   if (btn.dataset.arm === "1"){
     disarm(btn); clearTimeout(armTimer); armedBtn = null;
     action();
+    btn.dataset.coolUntil = String(Date.now() + 800);   // 执行后冷却 800ms
     return;
   }
   btn.dataset.arm = "1"; btn.dataset.label = btn.textContent;
@@ -1868,6 +1865,7 @@ $("btnUndo").addEventListener("click", () => {
     armConfirm(b, "请求悔棋？", () => netAction({ type: "undoRequest" }));   // 需对方同意，也防误触
     return;
   }
+  if (state.thinking){ undoMove(); return; }   // AI 思考中：单击立即撤销误落子（不等确认）
   armConfirm(b, "确认悔棋？", undoMove);
 });
 $("undoYes").addEventListener("click", () => { $("undoAsk").classList.remove("show"); netAction({ type: "undoResponse", accept: true }); });
