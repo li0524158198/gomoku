@@ -7,5 +7,5 @@ if ! command -v node >/dev/null 2>&1; then
   echo "[错误] 未检测到 Node.js，请先安装：https://nodejs.org/"
   exit 1
 fi
-echo "正在启动五子棋服务器（端口 ${PORT}），浏览器将自动打开游戏页面..."
+echo "正在启动五子棋服务器（端口 ${PORT}）...（停止：./stop-gomoku.sh ${PORT}）"
 node gomoku-server.js "$PORT"

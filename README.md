@@ -33,6 +33,7 @@
 
 - `index.html` —— 游戏本体（HTML/CSS/JS 全部内嵌，双击即可离线玩单机模式）
 - `docker-deploy.bat` / `docker-deploy.sh` —— **Docker 一键部署**（构建 + 启动 + 健康检查 + 开浏览器）
+- `stop-gomoku.bat` / `stop-gomoku.sh` —— 一键停止（Docker 容器与端口进程一并清理）
 - `start-gomoku.bat` / `start-gomoku.sh` —— 免 Docker 一键启动器（裸 Node 运行）
 - `Dockerfile` / `docker-compose.yml` —— Docker 镜像与编排
 - `config.example.json` / `config.json` —— 服务器配置模板与本机配置（端口、观战上限、密码长度等；

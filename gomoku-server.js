@@ -83,7 +83,7 @@ function getRoom(id, pwd){   // 仅 join 使用：不存在则按该密码创建
   let r = rooms.get(id);
   if (!r){
     r = { id, pwd: pwd || "", players: { [BLACK]: null, [WHITE]: null }, spectators: new Map(),
-          game: new Game(), pendingUndo: null, ts: Date.now() };
+          colorMem: new Map(), game: new Game(), pendingUndo: null, ts: Date.now() };
     rooms.set(id, r);
   }
   r.ts = Date.now();
@@ -188,25 +188,46 @@ const server = http.createServer((req, res) => {
     const rid = normRoom(id);
     if (!rid) return finish(400, { error: "房间号无效" });
 
-    /* 加入房间：空位即入，先到执黑；满员则进入观战。房间有密码时须验证（玩家与观战一致） */
+    /* 加入房间：座位分配优先级——
+     * 1) 同一玩家标识仍在座位上 → 原色重连（换发新令牌）
+     * 2) 玩家标识在本房间的执色记忆且该座位空闲 → 归还原色（退出重进不互换黑白）
+     * 3) 自由分配：先到执黑，后到执白；满员转观战（房间有密码时须验证） */
     if (action === "join" && req.method === "POST"){
       const pwd = String(data.pwd || "").trim().slice(0, PASSWORD_MAX);
+      const pid = String(data.pid || "").trim().slice(0, 32);
       const existing = rooms.get(rid);
       if (existing && existing.pwd && existing.pwd !== pwd)
         return finish(403, { error: "房间密码错误" });
-      const r = getRoom(rid, pwd);   // 不存在则创建，密码以首位创建者为准
+      const r = getRoom(rid, pwd);
+      if (!r.colorMem) r.colorMem = new Map();
+
       let color = 0;
-      if (!hasSeat(r, BLACK)) color = BLACK;
-      else if (!hasSeat(r, WHITE)) color = WHITE;
+      if (pid){
+        for (const c of [BLACK, WHITE]){                       // 1) 仍在座位：原色重连
+          if (r.players[c] && r.players[c].pid === pid){ color = c; break; }
+        }
+        if (!color){
+          const mem = r.colorMem.get(pid);                     // 2) 归还记忆执色
+          if (mem !== undefined && !hasSeat(r, mem)) color = mem;
+        }
+        if (!color){                                           // 3) 自由分配
+          if (!hasSeat(r, BLACK)) color = BLACK;
+          else if (!hasSeat(r, WHITE)) color = WHITE;
+        }
+      } else {                                                 // 无标识的旧客户端：自由分配
+        if (!hasSeat(r, BLACK)) color = BLACK;
+        else if (!hasSeat(r, WHITE)) color = WHITE;
+      }
       if (color){
         const token = crypto.randomBytes(9).toString("hex");
-        r.players[color] = { token, res: null, detachTimer: null };
+        r.players[color] = { token, pid, res: null, detachTimer: null };
+        if (pid) r.colorMem.set(pid, color);
         broadcast(r, "join", { who: color });
         return finish(200, { token, color, roomId: rid, specCount: r.spectators.size, state: stateOf(r) });
       }
       if (r.spectators.size >= SPEC_MAX) return finish(409, { error: `观战席已满（${SPEC_MAX} 人）` });
       const token = crypto.randomBytes(9).toString("hex");
-      r.spectators.set(token, { res: null });
+      r.spectators.set(token, { res: null, pid });
       broadcast(r, "spec", {});
       return finish(200, { token, color: 0, roomId: rid, specCount: r.spectators.size, state: stateOf(r) });
     }
@@ -300,8 +321,11 @@ const server = http.createServer((req, res) => {
         if (!hasSeat(r, BLACK)) color = BLACK;
         else if (!hasSeat(r, WHITE)) color = WHITE;
         else return finish(400, { error: "暂无空位" });
+        const sp = r.spectators.get(token);
+        const pid = (sp && sp.pid) || "";
         r.spectators.delete(token);
-        r.players[color] = { token, res: null, detachTimer: null };
+        r.players[color] = { token, pid, res: null, detachTimer: null };
+        if (pid) r.colorMem.set(pid, color);
         broadcast(r, "join", { who: color });
         return finish(200, { ok: true, color });
       }

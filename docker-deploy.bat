@@ -44,7 +44,8 @@ if errorlevel 1 (
 )
 
 echo [3/3] Waiting for server and opening browser...
-timeout /t 2 /nobreak >nul
+ping -n 2 127.0.0.1 >nul
+ping -n 2 127.0.0.1 >nul
 where curl >nul 2>nul && curl -s -o nul -w "Health check: HTTP %%{http_code}\n" http://127.0.0.1:%PORT%/
 start "" "http://127.0.0.1:%PORT%/"
 
@@ -53,7 +54,7 @@ echo ============================================================
 echo  Deployed!   Game:  http://127.0.0.1:%PORT%/
 echo              LAN:   http://^(your-ip^):%PORT%/
 echo  Logs:   docker logs -f gomoku
-echo  Stop:   docker rm -f gomoku
+echo  Stop:   stop-gomoku.bat  (or: docker rm -f gomoku)
 echo  Config: edit config.json  then  docker restart gomoku
 echo ============================================================
 pause

@@ -14,7 +14,7 @@ if errorlevel 1 (
 )
 echo Starting Gomoku server on port %PORT% ...
 echo Your browser will open automatically  (http://127.0.0.1:%PORT%/)
-echo Stop the server: close this window, or press Ctrl+C
+echo Stop: close this window / Ctrl+C, or run stop-gomoku.bat %PORT%
 echo.
 node gomoku-server.js %PORT%
 echo.

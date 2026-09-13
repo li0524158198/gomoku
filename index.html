@@ -66,6 +66,11 @@
   .hint { margin-top: 8px; font-size: 11.5px; color: #77809a; line-height: 1.6; }
 
   .btn-row { display: flex; gap: 10px; }
+  .btn-row .btn { flex: 1; padding: 9px 0; font-size: 13.5px; white-space: nowrap; }
+  .btn-row .btn.small { flex: 0 0 44px; }
+  .btn.arm { background: #d9534f !important; border-color: #d9534f !important;
+             color: #fff !important; font-weight: 700; }
+  .btn.arm:hover:not(:disabled) { background: #e05a55 !important; }
   .btn { flex: 1; border: 1px solid #3d465c; background: #2a3140; color: #e9e7e2; padding: 10px 0;
          border-radius: 10px; font-size: 14px; cursor: pointer; font-family: inherit; transition: all .15s; }
   .btn:hover:not(:disabled) { background: #354050; border-color: #55617e; }
@@ -164,6 +169,15 @@
     </div>
 
     <div class="card">
+      <div class="btn-row">
+        <button class="btn primary" id="btnNew" title="重新开始（二次确认防误触）">🔄 重新开始</button>
+        <button class="btn" id="btnUndo" title="悔棋（二次确认防误触）">↩ 悔棋</button>
+        <button class="btn" id="btnHint" title="提示一手（快捷键 H）">💡 提示</button>
+        <button class="btn small" id="btnMute" title="音效开关">🔊</button>
+      </div>
+    </div>
+
+    <div class="card">
       <h3>对弈模式</h3>
       <div class="seg" id="segMode">
         <button data-v="ai" class="on">人机对弈</button>
@@ -216,22 +230,14 @@
       <div id="recordList"></div>
     </div>
 
-    <div class="card">
-      <div class="btn-row">
-        <button class="btn primary" id="btnNew">重新开始</button>
-        <button class="btn" id="btnUndo" title="撤销你与 AI 各一手">悔棋</button>
-        <button class="btn" id="btnHint" title="提示一手（快捷键 H）">💡 提示</button>
-        <button class="btn small" id="btnMute" title="音效开关">🔊</button>
-      </div>
-    </div>
 
     <div class="card rules">
       <b>玩法</b>：点击棋盘交叉点落子，任意方向先连成五子者胜（五连以上同样有效）。<br>
       <b>悔棋</b>：人机模式撤销你与 AI 各一手；双人模式撤销最后一手。<br>
       <b>回放</b>：每局结束自动存档（本机保存最近 50 局），点击记录可回放——空格播放，←/→ 单步。<br>
       <b>提示</b>：卡住时点「💡 提示」或按 H，金圈标出推荐落点（按大师级计算）。<br>
-      <b>在线对战</b>：先运行 <b>node gomoku-server.js</b> 启动服务器，两人打开页面选「在线对战」，
-      输入相同房间号即匹配，先加入者执黑；悔棋需对方同意。
+      <b>在线对战</b>：两人打开同一页面，选「在线对战」并输入相同房间号即匹配，
+      先加入者执黑；支持房间密码与好友观战，悔棋需对方同意。
     </div>
   </div>
 </div>
@@ -1114,12 +1120,21 @@ fetch("config.json", { cache: "no-store" })
   })
   .catch(() => {});
 function setOnlineHint(t){ $("onlineHint").textContent = t; }
-async function probeServer(){    // 切到在线模式时探测服务器是否在线，给出准确引导
+function playerKey(){            // 持久玩家标识：退出重进后服务器按此归还原执色
+  try {
+    let k = localStorage.getItem("gomoku_player_key");
+    if (!k){ k = "p" + Math.random().toString(36).slice(2, 12) + Date.now().toString(36); localStorage.setItem("gomoku_player_key", k); }
+    return k;
+  } catch (e) { return ""; }
+}
+async function probeServer(){    // 切到在线模式时探测服务器是否在线（面向玩家只提示结果，细节进日志）
   try {
     await fetch(`${NET_BASE}/api/room/__probe__/peek`, { cache: "no-store" });
     setOnlineHint("对战服务器已就绪 · 输入房间号即可加入（可设置选填密码）");
   } catch (e) {
-    setOnlineHint("未检测到对战服务器——Windows 双击「start-gomoku.bat」，Linux/macOS 运行 ./start-gomoku.sh");
+    setOnlineHint("对战服务器未连接，请稍后重试");
+    console.warn("[gomoku] 未检测到对战服务器。启动方式：Windows 双击 start-gomoku.bat，" +
+      "Linux/macOS 运行 ./start-gomoku.sh；Docker 部署用 docker-deploy 或 docker compose up -d。", e);
   }
 }
 function refreshOnlineHint(){
@@ -1145,7 +1160,7 @@ async function netJoin(){
   try {
     const resp = await fetch(`${NET_BASE}/api/room/${id}/join`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pwd }),
+      body: JSON.stringify({ pwd, pid: playerKey() }),
     });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok){ setOnlineHint(data.error || "加入失败"); return; }
@@ -1163,7 +1178,9 @@ async function netJoin(){
     $("btnJoinRoom").textContent = "退出房间";
     connectEvents();
   } catch (e) {
-    setOnlineHint("无法连接对战服务器——Windows 请双击「start-gomoku.bat」，Linux/macOS 运行 ./start-gomoku.sh（或 node gomoku-server.js），然后重试");
+    setOnlineHint("无法连接对战服务器，请稍后重试");
+    console.warn("[gomoku] 加入房间失败（网络原因）。启动方式：Windows 双击 start-gomoku.bat，" +
+      "Linux/macOS 运行 ./start-gomoku.sh；Docker 部署用 docker-deploy 或 docker compose up -d。", e);
   }
 }
 function netLeave(silent){
@@ -1360,7 +1377,7 @@ async function netTakeSeat(){
   try {
     const resp = await fetch(`${NET_BASE}/api/room/${o.roomId}/action`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token: o.token, type: "takeSeat" }),
+      body: JSON.stringify({ token: o.token, type: "takeSeat", pid: playerKey() }),
     });
     const d = await resp.json().catch(() => ({}));
     if (!resp.ok || d.error){ setOnlineHint(d.error || "加入失败"); setTimeout(refreshOnlineHint, 1500); return; }
@@ -1401,7 +1418,7 @@ function clearLive(){ try { localStorage.removeItem(LIVE_KEY); } catch (e) {} }
 const MODE_HINTS = {
   ai: "与 AI 对弈，你可选执黑或执白。",
   pvp: "同屏轮流落子：黑方先行，先连成五子者胜。",
-  online: "输入相同房间号匹配对手；服务器未启动请先运行启动脚本（start-gomoku / docker-deploy）。",
+  online: "输入相同房间号与好友远程对战，先加入者执黑；支持房间密码与观战。",
 };
 const LEVEL_HINTS = [
   "松懈防守：偶尔失误，适合热身。",
@@ -1495,6 +1512,10 @@ function lastInfoText(){
 
 function updatePanel(){
   const g = state.game, cur = currentColor(), pvp = state.mode === "pvp";
+  for (const id of ["btnNew", "btnUndo", "btnHint", "btnMute"]){   // 被禁用时退出确认态
+    const b = $(id);
+    if (b && b.disabled && b.dataset.arm === "1") disarm(b);
+  }
   if (state.replay){
     const rp = state.replay, n = rp.rec.moves.length;
     const recMode = rp.rec.mode || "ai";
@@ -1641,15 +1662,37 @@ $("segColor").addEventListener("click", e => {
   [...$("segColor").children].forEach(x => x.classList.toggle("on", x === b));
   newGame();
 });
-$("btnNew").addEventListener("click", restartGame);
-$("btnAgain").addEventListener("click", restartGame);
-$("btnUndo").addEventListener("click", () => {
-  if (state.mode === "online" && state.online){
-    if (state.game.moves.length === 0) return;
-    netAction({ type: "undoRequest" });
+/* 二次确认防误触：第一次点击进入红色确认态（3 秒后自动还原），再点才真正执行 */
+let armedBtn = null, armTimer = null;
+function disarm(btn){
+  btn.dataset.arm = "";
+  btn.classList.remove("arm");
+  if (btn.dataset.label) btn.textContent = btn.dataset.label;
+}
+function armConfirm(btn, confirmText, action){
+  if (btn.disabled) return;
+  if (armedBtn && armedBtn !== btn) disarm(armedBtn);          // 同时只保留一个确认态
+  if (btn.dataset.arm === "1"){
+    disarm(btn); clearTimeout(armTimer); armedBtn = null;
+    action();
     return;
   }
-  undoMove();
+  btn.dataset.arm = "1"; btn.dataset.label = btn.textContent;
+  btn.classList.add("arm"); btn.textContent = confirmText;
+  armedBtn = btn;
+  armTimer = setTimeout(() => { if (armedBtn === btn){ disarm(btn); armedBtn = null; } }, 3000);
+}
+
+$("btnNew").addEventListener("click", () => armConfirm($("btnNew"), "确认重开？", restartGame));
+$("btnAgain").addEventListener("click", restartGame);
+$("btnUndo").addEventListener("click", () => {
+  const b = $("btnUndo");
+  if (state.mode === "online" && state.online){
+    if (b.disabled || state.game.moves.length === 0) return;
+    armConfirm(b, "请求悔棋？", () => netAction({ type: "undoRequest" }));   // 需对方同意，也防误触
+    return;
+  }
+  armConfirm(b, "确认悔棋？", undoMove);
 });
 $("undoYes").addEventListener("click", () => { $("undoAsk").classList.remove("show"); netAction({ type: "undoResponse", accept: true }); });
 $("undoNo").addEventListener("click", () => { $("undoAsk").classList.remove("show"); netAction({ type: "undoResponse", accept: false }); });
