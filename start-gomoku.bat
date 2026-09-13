@@ -21,5 +21,5 @@ echo.
 echo Server stopped.
 echo If it reported the port was busy, a server is already running -
 echo just use the browser page at http://127.0.0.1:%PORT%/
-echo To use another port:  gomoku.bat 3000-3010
+echo To use another port:  start-gomoku.bat 3000-3010
 pause

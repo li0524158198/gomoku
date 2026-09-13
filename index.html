@@ -1119,7 +1119,7 @@ async function probeServer(){    // 切到在线模式时探测服务器是否�
     await fetch(`${NET_BASE}/api/room/__probe__/peek`, { cache: "no-store" });
     setOnlineHint("对战服务器已就绪 · 输入房间号即可加入（可设置选填密码）");
   } catch (e) {
-    setOnlineHint("未检测到对战服务器——Windows 双击「启动五子棋.bat」，Linux/macOS 运行 ./start-gomoku.sh");
+    setOnlineHint("未检测到对战服务器——Windows 双击「start-gomoku.bat」，Linux/macOS 运行 ./start-gomoku.sh");
   }
 }
 function refreshOnlineHint(){
@@ -1163,7 +1163,7 @@ async function netJoin(){
     $("btnJoinRoom").textContent = "退出房间";
     connectEvents();
   } catch (e) {
-    setOnlineHint("无法连接对战服务器——Windows 请双击「启动五子棋.bat」，Linux/macOS 运行 ./start-gomoku.sh（或 node gomoku-server.js），然后重试");
+    setOnlineHint("无法连接对战服务器——Windows 请双击「start-gomoku.bat」，Linux/macOS 运行 ./start-gomoku.sh（或 node gomoku-server.js），然后重试");
   }
 }
 function netLeave(silent){
@@ -1401,7 +1401,7 @@ function clearLive(){ try { localStorage.removeItem(LIVE_KEY); } catch (e) {} }
 const MODE_HINTS = {
   ai: "与 AI 对弈，你可选执黑或执白。",
   pvp: "同屏轮流落子：黑方先行，先连成五子者胜。",
-  online: "输入相同房间号匹配对手；需先运行 node gomoku-server.js。",
+  online: "输入相同房间号匹配对手；服务器未启动请先运行启动脚本（start-gomoku / docker-deploy）。",
 };
 const LEVEL_HINTS = [
   "松懈防守：偶尔失误，适合热身。",
