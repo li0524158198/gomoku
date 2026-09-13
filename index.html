@@ -203,6 +203,9 @@
         <button class="btn small" id="btnRandRoom" title="随机房间号">🎲</button>
         <button class="btn small primary" id="btnJoinRoom">加入</button>
       </div>
+      <div class="online-row">
+        <input id="pwdInput" placeholder="房间密码（选填，首位加入者设定）" maxlength="16" autocomplete="off">
+      </div>
       <div class="hint" id="onlineHint">两位玩家输入相同房间号即可匹配：先加入的执黑先行。</div>
       <button class="btn" id="btnTakeSeat" style="display:none;">有空位了，加入对局</button>
       <div id="undoAsk"><span>对方请求悔棋，是否同意？</span><button class="btn small" id="undoYes">同意</button><button class="btn small" id="undoNo">拒绝</button></div>
@@ -1100,8 +1103,25 @@ function stopReplayOnly(){                      // newGame 用：不恢复快照
 }
 
 /* ---------- 在线对战 ---------- */
-const NET_BASE = location.protocol.startsWith("http") ? "" : "http://127.0.0.1:3000";
+let NET_BASE = location.protocol.startsWith("http") ? "" : "http://127.0.0.1:3000";
+/* file:// 打开时按 config.json 的端口回退连接（http(s) 打开为同源，无需此项） */
+fetch("config.json", { cache: "no-store" })
+  .then(r => r.ok ? r.json() : null)
+  .then(c => {
+    if (!c || !c.port || location.protocol.startsWith("http")) return;
+    const firstPort = String(c.port).split(/[-,]/)[0].trim();
+    if (/^\d{1,5}$/.test(firstPort)) NET_BASE = "http://127.0.0.1:" + firstPort;
+  })
+  .catch(() => {});
 function setOnlineHint(t){ $("onlineHint").textContent = t; }
+async function probeServer(){    // 切到在线模式时探测服务器是否在线，给出准确引导
+  try {
+    await fetch(`${NET_BASE}/api/room/__probe__/peek`, { cache: "no-store" });
+    setOnlineHint("对战服务器已就绪 · 输入房间号即可加入（可设置选填密码）");
+  } catch (e) {
+    setOnlineHint("未检测到对战服务器——Windows 双击「启动五子棋.bat」，Linux/macOS 运行 ./start-gomoku.sh");
+  }
+}
 function refreshOnlineHint(){
   const o = state.online;
   if (!o) return setOnlineHint("两位玩家输入相同房间号即可匹配：先加入的执黑先行。");
@@ -1120,9 +1140,13 @@ async function netJoin(){
   let id = input.value.trim().replace(/[^0-9A-Za-z]/g, "").slice(0, 8);
   if (!id) id = String(1000 + Math.floor(Math.random() * 9000));
   input.value = id;
+  const pwd = $("pwdInput").value.trim().slice(0, 16);
   setOnlineHint(`正在加入房间 ${id} …`);
   try {
-    const resp = await fetch(`${NET_BASE}/api/room/${id}/join`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    const resp = await fetch(`${NET_BASE}/api/room/${id}/join`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pwd }),
+    });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok){ setOnlineHint(data.error || "加入失败"); return; }
     state.online = {
@@ -1131,13 +1155,15 @@ async function netJoin(){
       connected: false, oppJoined: false, es: null,
       seats: (data.state && data.state.seats) || null,
       specCount: data.specCount || 0,
+      pwd,
     };
     saveLive();
     input.disabled = true;
+    $("pwdInput").disabled = true;
     $("btnJoinRoom").textContent = "退出房间";
     connectEvents();
   } catch (e) {
-    setOnlineHint("无法连接服务器——请先在本目录运行：node gomoku-server.js");
+    setOnlineHint("无法连接对战服务器——Windows 请双击「启动五子棋.bat」，Linux/macOS 运行 ./start-gomoku.sh（或 node gomoku-server.js），然后重试");
   }
 }
 function netLeave(silent){
@@ -1154,6 +1180,7 @@ function netLeave(silent){
   state.recSaved = false;
   $("undoAsk").classList.remove("show");
   $("roomInput").disabled = false;
+  $("pwdInput").disabled = false;
   $("btnJoinRoom").textContent = "加入";
   if (!silent) newGame();
   saveLive();
@@ -1185,6 +1212,7 @@ function scheduleReconnectCheck(){
       if (!resp.ok){
         state.online = null;
         $("roomInput").disabled = false;
+        $("pwdInput").disabled = false;
         $("btnJoinRoom").textContent = "加入";
         setOnlineHint("房间已失效，请重新加入");
         newGame();
@@ -1268,6 +1296,7 @@ function handleNetMsg(msg){
       state.online = null;
       $("undoAsk").classList.remove("show");
       $("roomInput").disabled = false;
+      $("pwdInput").disabled = false;
       $("btnJoinRoom").textContent = "加入";
       setOnlineHint("该对局已在其他窗口打开，此处已退出");
       newGame();
@@ -1359,7 +1388,8 @@ function saveLive(){
       winner: g.winner || 0, draw: !!g.draw, over: !!state.over, winCells: g.winCells || null,
       recSaved: !!state.recSaved, tabKey: getTabKey(),
       online: state.online ? { roomId: state.online.roomId, token: state.online.token,
-                               role: state.online.role, myColor: state.online.myColor } : null,
+                               role: state.online.role, myColor: state.online.myColor,
+                               pwd: state.online.pwd || "" } : null,
     }));
   } catch (e) { /* 存储不可用时静默跳过 */ }
 }
@@ -1418,19 +1448,23 @@ function tryResume(){            // 页面加载时恢复上次对局
   if (state.mode === "online" && hasOnline && s.tabKey === getTabKey()){
     state.online = { roomId: s.online.roomId, token: s.online.token, role: s.online.role || "player",
                      myColor: s.online.myColor || 0, connected: false, oppJoined: false, es: null,
-                     seats: null, specCount: 0 };
+                     seats: null, specCount: 0, pwd: s.online.pwd || "" };
     $("roomInput").value = s.online.roomId;
     $("roomInput").disabled = true;
+    $("pwdInput").value = s.online.pwd || "";
+    $("pwdInput").disabled = true;
     $("btnJoinRoom").textContent = "退出房间";
     connectEvents();             // 以服务器状态为准：init 重建棋盘，会话失效则自动清理
   } else {
     if (state.mode === "online" && hasOnline){
       $("roomInput").value = s.online.roomId;   // 非属主窗口：预填房间号供手动重进
+      $("pwdInput").value = s.online.pwd || "";
       saveLive();                               // 该窗口此后接管存档
     }
     if (state.mode === "ai" && !state.over && currentColor() !== state.humanColor){
       scheduleAi();              // 续上时恰轮到 AI：自动续下
     }
+    if (state.mode === "online" && !state.online) probeServer();
   }
   return true;
 }
@@ -1579,16 +1613,20 @@ cv.addEventListener("mouseleave", () => { state.ghost = null; if (!state.animati
 
 $("segMode").addEventListener("click", e => {
   const b = e.target.closest("button");
-  if (!b || b.dataset.v === state.mode) return;
+  if (!b) return;
   const v = b.dataset.v;
+  if (v === state.mode){
+    if (v === "online" && !state.online) probeServer();   // 重复点击：重新探测服务器
+    return;
+  }
   if (state.mode === "online" && v !== "online") netLeave();   // 离开在线房间（内部会重置棋局）
   state.mode = v;
   [...$("segMode").children].forEach(x => x.classList.toggle("on", x === b));
   document.body.classList.remove("mode-ai", "mode-pvp", "mode-online");
   document.body.classList.add("mode-" + v);
   $("modeHint").textContent = MODE_HINTS[v];
-  newGame();
-});
+  if (v === "online" && !state.online) probeServer();
+  newGame();});
 $("segLevel").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
   state.level = +b.dataset.v;

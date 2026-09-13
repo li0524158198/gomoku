@@ -1,0 +1,12 @@
+# 依赖与运行产物
+node_modules/
+npm-debug.log*
+
+# 本机配置（从 config.example.json 复制而来，git pull 不会覆盖你的本地配置）
+config.json
+
+# 测试与临时文件
+*.log
+_c.mjs
+_docupdate.mjs
+_readme.mjs

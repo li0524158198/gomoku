@@ -1,0 +1,7 @@
+node_modules
+docs
+*.bat
+*.sh
+test-engine.mjs
+.git
+.gitignore

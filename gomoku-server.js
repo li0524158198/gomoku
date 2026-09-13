@@ -14,12 +14,54 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 const crypto = require("crypto");
 
-const PORT = Number(process.argv[2] || process.env.PORT || 3000);
-const ROOM_TTL = 2 * 60 * 60 * 1000;   // 房间最长闲置时间
-const RECONNECT_GRACE = 8000;          // 断线重连保留座位的宽限期
-const SPEC_MAX = 10;                   // 每房间观战人数上限
+/* —— 配置文件 ——
+ * config.example.json：仓库内模板（提交 git）
+ * config.json        ：本机实际配置（.gitignore 忽略，git pull 不会覆盖你的本地配置）
+ * 首次启动自动从模板复制生成；优先级：命令行参数 / 环境变量 > config.json > 内置默认 */
+const CFG_FILE = path.join(__dirname, "config.json");
+const CFG_EXAMPLE = path.join(__dirname, "config.example.json");
+try {
+  if (!fs.existsSync(CFG_FILE) && fs.existsSync(CFG_EXAMPLE)){
+    fs.copyFileSync(CFG_EXAMPLE, CFG_FILE);
+    console.log("已从 config.example.json 生成 config.json —— 修改该文件即可自定义配置（不会被 git 覆盖）。");
+  }
+} catch (e) {}
+function readConfigFile(){
+  try {
+    const v = JSON.parse(fs.readFileSync(CFG_FILE, "utf8"));
+    return (v && typeof v === "object" && !Array.isArray(v)) ? v : {};
+  } catch (e) { return {}; }
+}
+const FILE_CFG = readConfigFile();
+const num = (v, def) => (Number.isFinite(+v) ? +v : def);
+const str = (v, def) => (v === undefined || v === null || v === "") ? def : String(v);
+
+/* 端口来源优先级：命令行参数 > PORT 环境变量 > 配置文件 port > 3000
+ * 支持 "3000"（单端口）、"3000-3010"（范围，占用自动顺延）、"3000,8080"（候选列表） */
+const PORT_ARG = str(process.argv[2],
+                  str(process.env.PORT,
+                    str(process.env.PORT_RANGE, str(FILE_CFG.port, "3000"))));
+const HOST = str(process.env.HOST, str(FILE_CFG.host, "0.0.0.0"));  // 云服务器/Docker 需监听全部网卡
+const NO_OPEN = process.env.GOMOKU_NO_OPEN ? true : FILE_CFG.noOpen === true;
+const SPEC_MAX = Math.max(0, num(FILE_CFG.specMax, 5000));                      // 每房间观战人数上限
+const ROOM_TTL = Math.max(60_000, num(FILE_CFG.roomTtlHours, 2) * 3600_000);    // 房间最长闲置时间
+const RECONNECT_GRACE = Math.max(1000, num(FILE_CFG.reconnectGraceMs, 8000));   // 断线重连保留座位的宽限期
+const PASSWORD_MAX = Math.max(4, num(FILE_CFG.passwordMaxLen, 16));             // 房间密码最大长度
+
+const PORTS = (() => {
+  const out = [];
+  for (const part of String(PORT_ARG).split(",")){
+    const m = part.trim().match(/^(\d{1,5})(?:-(\d{1,5}))?$/);
+    if (!m) continue;
+    let a = +m[1], b = m[2] ? +m[2] : a;
+    if (b < a) [a, b] = [b, a];
+    for (let p = a; p <= b && out.length < 100; p++) out.push(p);
+  }
+  return out.length ? out : [3000];
+})();
 
 /* —— 从 index.html 提取纯逻辑引擎（与 test-engine.mjs 同一机制） —— */
 let Game, SIZE, EMPTY, BLACK, WHITE;
@@ -37,10 +79,10 @@ try {
 const rooms = new Map();
 const normRoom = id => String(id || "").trim().toUpperCase().replace(/[^0-9A-Z]/g, "").slice(0, 8);
 
-function getRoom(id){
+function getRoom(id, pwd){   // 仅 join 使用：不存在则按该密码创建（后加入者不能更改）
   let r = rooms.get(id);
   if (!r){
-    r = { id, players: { [BLACK]: null, [WHITE]: null }, spectators: new Map(),
+    r = { id, pwd: pwd || "", players: { [BLACK]: null, [WHITE]: null }, spectators: new Map(),
           game: new Game(), pendingUndo: null, ts: Date.now() };
     rooms.set(id, r);
   }
@@ -89,6 +131,21 @@ function detach(r, color){
 }
 
 /* —— HTTP —— */
+const { exec } = require("child_process");
+function autoOpenBrowser(url){
+  if (NO_OPEN) return;   // 配置文件 noOpen=true 或环境变量 GOMOKU_NO_OPEN（云服务器/容器无浏览器）
+  const cmd = process.platform === "win32" ? `start "" "${url}"`
+            : process.platform === "darwin" ? `open "${url}"`
+            : `xdg-open "${url}"`;
+  try { exec(cmd, () => {}); } catch (e) {}
+}
+function lanAddresses(port){
+  const ips = [];
+  for (const list of Object.values(os.networkInterfaces()))
+    for (const n of list || [])
+      if (n && n.family === "IPv4" && !n.internal) ips.push(n.address);
+  return ips.map(ip => `http://${ip}:${port}/`).join("   ") || "（未检测到局域网地址）";
+}
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, "http://x");
   const parts = url.pathname.split("/").filter(Boolean);
@@ -105,6 +162,13 @@ const server = http.createServer((req, res) => {
       fs.readFile(path.join(__dirname, "index.html"), (e, d) => {
         if (e){ res.writeHead(500); return res.end("err"); }
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+        res.end(d);
+      });
+    } else if (url.pathname === "/config.json"){
+      // 提供给页面客户端：file:// 场景下按配置端口回退连接
+      fs.readFile(CFG_FILE, (e, d) => {
+        if (e){ res.writeHead(404, cors); return res.end("{}"); }
+        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", ...cors });
         res.end(d);
       });
     } else { res.writeHead(404); res.end("nf"); }
@@ -124,9 +188,13 @@ const server = http.createServer((req, res) => {
     const rid = normRoom(id);
     if (!rid) return finish(400, { error: "房间号无效" });
 
-    /* 加入房间：空位即入，先到执黑；满员则进入观战 */
+    /* 加入房间：空位即入，先到执黑；满员则进入观战。房间有密码时须验证（玩家与观战一致） */
     if (action === "join" && req.method === "POST"){
-      const r = getRoom(rid);
+      const pwd = String(data.pwd || "").trim().slice(0, PASSWORD_MAX);
+      const existing = rooms.get(rid);
+      if (existing && existing.pwd && existing.pwd !== pwd)
+        return finish(403, { error: "房间密码错误" });
+      const r = getRoom(rid, pwd);   // 不存在则创建，密码以首位创建者为准
       let color = 0;
       if (!hasSeat(r, BLACK)) color = BLACK;
       else if (!hasSeat(r, WHITE)) color = WHITE;
@@ -136,7 +204,7 @@ const server = http.createServer((req, res) => {
         broadcast(r, "join", { who: color });
         return finish(200, { token, color, roomId: rid, specCount: r.spectators.size, state: stateOf(r) });
       }
-      if (r.spectators.size >= SPEC_MAX) return finish(409, { error: "对局席与观战席均已满" });
+      if (r.spectators.size >= SPEC_MAX) return finish(409, { error: `观战席已满（${SPEC_MAX} 人）` });
       const token = crypto.randomBytes(9).toString("hex");
       r.spectators.set(token, { res: null });
       broadcast(r, "spec", {});
@@ -272,7 +340,7 @@ const server = http.createServer((req, res) => {
     }
 
     if (action === "peek" && req.method === "GET"){
-      return finish(200, { ok: true, color: me, state: stateOf(r) });
+      return finish(200, { ok: true, color: isSpec ? 0 : me, state: stateOf(r) });
     }
 
     finish(404, { error: "not found" });
@@ -288,7 +356,34 @@ setInterval(() => {
   }
 }, 60_000);
 
-server.listen(PORT, () => {
-  console.log("五子棋在线对战服务器已启动: http://127.0.0.1:" + PORT);
-  console.log("两位玩家打开该地址 → 选择「在线对战」→ 输入相同房间号即可匹配。");
+/* 启动：按候选端口顺序尝试绑定；范围配置时端口被占用自动顺延 */
+let portIdx = 0;
+function bind(){
+  if (portIdx >= PORTS.length){
+    console.log(`候选端口全部不可用：${PORTS.join(", ")}`);
+    console.log(`对战服务器可能已在运行，直接打开 http://127.0.0.1:${PORTS[0]}/ 即可继续。`);
+    autoOpenBrowser(`http://127.0.0.1:${PORTS[0]}/`);
+    process.exit(0);
+  }
+  const p = PORTS[portIdx++];
+  server.listen(p, HOST, () => {
+    console.log("五子棋在线对战服务器已启动。");
+    console.log("  本机访问:  http://127.0.0.1:" + p + "/");
+    console.log("  局域网/云: " + lanAddresses(p));
+    console.log("玩家打开地址 → 选择「在线对战」→ 输入相同房间号即可匹配。");
+    console.log(`配置文件: ${CFG_FILE}（观战上限 ${SPEC_MAX} · 房间回收 ${Math.round(ROOM_TTL / 3600000)}h · 重连宽限 ${RECONNECT_GRACE}ms）`);
+    console.log(`(端口配置 ${PORT_ARG}，实际使用 ${p}；配置文件或环境变量 GOMOKU_NO_OPEN 可禁止自动开浏览器)`);
+    autoOpenBrowser(`http://127.0.0.1:${p}/`);
+  });
+}
+server.on("error", (e) => {
+  if (e.code === "EADDRINUSE" || e.code === "EACCES"){
+    const failed = PORTS[portIdx - 1];
+    console.log(`端口 ${failed} 不可用（${e.code === "EACCES" ? "无权限，建议用 1024 以上端口" : "已被占用"}），尝试下一个候选端口...`);
+    bind();
+    return;
+  }
+  console.error("服务器错误：" + (e && e.message));
+  process.exit(1);
 });
+bind();
