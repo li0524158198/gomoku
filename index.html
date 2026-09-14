@@ -1662,7 +1662,7 @@ function statusText(){
     if (pvp) return g.winner === BLACK ? "🏆 黑棋获胜！" : "🏆 白棋获胜！";
     return g.winner === state.humanColor ? "🎉 恭喜，你赢了！" : "AI 获胜，再试试？";
   }
-  if (state.thinking) return "AI 思考中";
+  if (state.thinking) return "AI 思考中…（误落子可点「悔棋」立即撤销）";
   if (pvp) return currentColor() === BLACK ? "轮到黑方落子（黑先行）" : "轮到白方落子";
   return "轮到你落子，点击棋盘即可";
 }
@@ -1683,8 +1683,8 @@ function updatePanel(){
   for (const id of ["btnNew", "btnUndo", "btnHint", "btnMute"]){   // 被禁用时退出确认态
     const b = $(id);
     if (b && b.disabled && b.dataset.arm === "1") disarm(b);
-    updateLearnInfo();
   }
+  updateLearnInfo();
   if (state.replay){
     const rp = state.replay, n = rp.rec.moves.length;
     const recMode = rp.rec.mode || "ai";
